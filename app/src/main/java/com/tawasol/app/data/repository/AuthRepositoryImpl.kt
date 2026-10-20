@@ -61,13 +61,13 @@ class AuthRepositoryImpl(
                         null
                     }
                     if (!resolvedUsername.isNullOrBlank()) {
-                        "$resolvedUsername@tawasol.local"
+                        "$resolvedUsername@tawasol.app"
                     } else {
                         cleanIdentifier
                     }
                 } else {
                     val cleanUsername = cleanIdentifier.removePrefix("@").lowercase()
-                    "$cleanUsername@tawasol.local"
+                    "$cleanUsername@tawasol.app"
                 }
 
                 // Authenticate with Supabase Auth
@@ -175,7 +175,7 @@ class AuthRepositoryImpl(
             }
 
             // 2. Auth identity in Supabase Auth (deterministic and private)
-            val authEmail = "$cleanUsername@tawasol.local"
+            val authEmail = "$cleanUsername@tawasol.app"
 
             supabaseProvider.auth.signUpWith(Email) {
                 this.email = authEmail

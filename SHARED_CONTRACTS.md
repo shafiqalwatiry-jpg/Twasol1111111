@@ -22,7 +22,7 @@
 ## 2. التسجيل، تسجيل الدخول، والمصادقة (Auth Flow & Session)
 * **التسجيل (Registration):**
   1. التحقق من فرادة `username` في جدول `profiles`.
-  2. إنشاء حساب في Supabase Auth عبر البريد الإلكتروني أو توليد بريد افتراضي معرف للمستخدم (`username@tawasol.local` إذا لم يُدخل بريداً).
+  2. إنشاء حساب في Supabase Auth عبر البريد الإلكتروني أو توليد بريد افتراضي معرف للمستخدم (`username@tawasol.app` إذا لم يُدخل بريداً).
   3. إنشاء سجل الملف العام في `public.profiles` (`id, username, display_name, avatar_url, bio`).
   4. حفظ البيانات الحساسة (رقم الهاتف والبريد الفعلي) حصراً داخل جدول `public.user_contacts` المحمي بسياسات RLS، ولا يمكن لأي مستخدم آخر الاستعلام عنه.
   5. إنشاء إعدادات الخصوصية الافتراضية في `public.privacy_settings`.
