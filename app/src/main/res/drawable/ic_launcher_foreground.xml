@@ -1,0 +1,41 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Soft elevation shadow under chat bubble -->
+    <path
+        android:fillColor="#26000000"
+        android:pathData="M34,31 h40 c7.7,0 14,6.3 14,14 v16 c0,7.7 -6.3,14 -14,14 h-18 l-13,11 v-11 h-9 c-7.7,0 -14,-6.3 -14,-14 v-16 c0,-7.7 6.3,-14 14,-14 z" />
+
+    <!-- Main Chat Bubble (Crisp White) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,29 h40 c7.7,0 14,6.3 14,14 v16 c0,7.7 -6.3,14 -14,14 h-18 l-13,11 v-11 h-9 c-7.7,0 -14,-6.3 -14,-14 v-16 c0,-7.7 6.3,-14 14,-14 z" />
+
+    <!-- Tawasol Connection Emblem inside the bubble (Teal #075E54) -->
+    <!-- Two communicating nodes with a connecting wave -->
+    <!-- Left node -->
+    <path
+        android:fillColor="#0D9488"
+        android:pathData="M42,51 A4.5,4.5 0 1,0 42,42 A4.5,4.5 0 1,0 42,51 Z" />
+
+    <!-- Center connecting message dot -->
+    <path
+        android:fillColor="#00A884"
+        android:pathData="M54,51 A4.5,4.5 0 1,0 54,42 A4.5,4.5 0 1,0 54,51 Z" />
+
+    <!-- Right node -->
+    <path
+        android:fillColor="#075E54"
+        android:pathData="M66,51 A4.5,4.5 0 1,0 66,42 A4.5,4.5 0 1,0 66,51 Z" />
+
+    <!-- Subtle connection bridge arc underneath the conversation dots -->
+    <path
+        android:strokeWidth="2.5"
+        android:strokeColor="#0D9488"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M42,58 Q54,64 66,58" />
+</vector>

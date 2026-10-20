@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand colors for Tawasol -->
+    <color name="tawasol_primary">#0D9488</color>
+    <color name="tawasol_primary_dark">#0F766E</color>
+    <color name="tawasol_accent">#14B8A6</color>
+    <color name="tawasol_background_dark">#0F172A</color>
+    <color name="tawasol_surface_dark">#1E293B</color>
+    <color name="tawasol_text_primary">#F8FAFC</color>
+    <color name="tawasol_text_secondary">#94A3B8</color>
+</resources>
