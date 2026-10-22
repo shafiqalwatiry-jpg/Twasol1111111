@@ -6,6 +6,7 @@ import com.tawasol.app.domain.model.MessageType
 import com.tawasol.app.domain.model.PrivacySettings
 import com.tawasol.app.domain.model.SafetyNumber
 import com.tawasol.app.domain.model.User
+import com.tawasol.app.domain.model.UserStatus
 import kotlinx.coroutines.flow.Flow
 
 interface AuthRepository {

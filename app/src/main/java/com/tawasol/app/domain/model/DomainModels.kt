@@ -104,6 +104,12 @@ data class UserStatus(
     val createdAt: Instant = Instant.now(),
     val expiresAt: Instant = Instant.now().plusSeconds(86400),
     val viewCount: Int = 0,
-    val isSelf: Boolean = false
-)
+    val isSelf: Boolean = false,
+    val backgroundColor: String? = null,
+    val isViewedByMe: Boolean = false
+) {
+    val content: String? get() = text
+    val mediaType: String get() = statusType
+    val viewsCount: Int get() = viewCount
+}
 

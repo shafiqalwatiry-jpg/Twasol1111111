@@ -76,36 +76,32 @@ class AccountIsolationAndStatusTest {
             return _flow
         }
 
-        override fun getMyStatuses(): Flow<List<UserStatus>> {
+        fun getMyStatuses(): Flow<List<UserStatus>> {
             updateFlow()
             return _flow.map { list -> list.filter { it.userId == currentUserId } }
         }
 
-        override suspend fun createTextStatus(text: String, backgroundColor: String): Result<UserStatus> {
+        override suspend fun postTextStatus(text: String): Result<UserStatus> {
             val status = UserStatus(
                 id = "status_${statuses.size + 1}",
                 userId = currentUserId,
                 userDisplayName = "حساب تجريبي",
                 userAvatarUrl = null,
-                content = text,
+                text = text,
                 mediaUrl = null,
-                mediaType = "text",
-                backgroundColor = backgroundColor,
+                statusType = "text",
+                backgroundColor = "#005C4B",
                 createdAt = Instant.now(),
                 expiresAt = Instant.now().plus(24, ChronoUnit.HOURS),
-                viewsCount = 0,
-                isViewedByMe = false
+                viewCount = 0,
+                isSelf = true
             )
             statuses.add(status)
             updateFlow()
             return Result.success(status)
         }
 
-        override suspend fun createImageStatus(
-            imageBytes: ByteArray,
-            caption: String?,
-            backgroundColor: String?
-        ): Result<UserStatus> {
+        override suspend fun postMediaStatus(imageBytes: ByteArray, caption: String?): Result<UserStatus> {
             if (imageBytes.isEmpty()) {
                 return Result.failure(IllegalArgumentException("الصورة فارغة"))
             }
@@ -114,27 +110,27 @@ class AccountIsolationAndStatusTest {
                 userId = currentUserId,
                 userDisplayName = "حساب تجريبي",
                 userAvatarUrl = null,
-                content = caption,
+                text = caption,
                 mediaUrl = "https://fake.storage/img_${System.currentTimeMillis()}.jpg",
-                mediaType = "image",
-                backgroundColor = backgroundColor ?: "#005C4B",
+                statusType = "image",
+                backgroundColor = "#005C4B",
                 createdAt = Instant.now(),
                 expiresAt = Instant.now().plus(24, ChronoUnit.HOURS),
-                viewsCount = 0,
-                isViewedByMe = false
+                viewCount = 0,
+                isSelf = true
             )
             statuses.add(status)
             updateFlow()
             return Result.success(status)
         }
 
-        override suspend fun markStatusAsViewed(statusId: String): Result<Unit> {
+        override suspend fun markStatusViewed(statusId: String): Result<Unit> {
             val idx = statuses.indexOfFirst { it.id == statusId }
             if (idx != -1) {
                 val current = statuses[idx]
                 if (!current.isViewedByMe) {
                     statuses[idx] = current.copy(
-                        viewsCount = current.viewsCount + 1,
+                        viewCount = current.viewCount + 1,
                         isViewedByMe = true
                     )
                     updateFlow()
@@ -148,6 +144,15 @@ class AccountIsolationAndStatusTest {
             updateFlow()
             return if (removed) Result.success(Unit) else Result.failure(IllegalStateException("الحالة غير موجودة أو ليست لك"))
         }
+
+        suspend fun createTextStatus(text: String, backgroundColor: String = "#005C4B"): Result<UserStatus> =
+            postTextStatus(text)
+
+        suspend fun createImageStatus(imageBytes: ByteArray, caption: String? = null, backgroundColor: String? = null): Result<UserStatus> =
+            postMediaStatus(imageBytes, caption)
+
+        suspend fun markStatusAsViewed(statusId: String): Result<Unit> =
+            markStatusViewed(statusId)
     }
 
     private lateinit var roomStorage: FakeRoomStorage
@@ -263,13 +268,13 @@ class AccountIsolationAndStatusTest {
             userId = "user_A",
             userDisplayName = "حساب قديم",
             userAvatarUrl = null,
-            content = "حالة قديمة جداً",
+            text = "حالة قديمة جداً",
             mediaUrl = null,
-            mediaType = "text",
+            statusType = "text",
             backgroundColor = "#128C7E",
             createdAt = Instant.now().minus(25, ChronoUnit.HOURS),
             expiresAt = Instant.now().minus(1, ChronoUnit.HOURS),
-            viewsCount = 10,
+            viewCount = 10,
             isViewedByMe = true
         )
         (statusRepository as FakeStatusRepository).statuses.add(expiredStatus)
@@ -312,13 +317,13 @@ class AccountIsolationAndStatusTest {
             userId = "peer_user_123",
             userDisplayName = "صديق",
             userAvatarUrl = null,
-            content = "حالة الصديق",
+            text = "حالة الصديق",
             mediaUrl = null,
-            mediaType = "text",
+            statusType = "text",
             backgroundColor = "#25D366",
             createdAt = Instant.now(),
             expiresAt = Instant.now().plus(24, ChronoUnit.HOURS),
-            viewsCount = 0,
+            viewCount = 0,
             isViewedByMe = false
         )
         (statusRepository as FakeStatusRepository).statuses.add(peerStatus)

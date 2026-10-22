@@ -123,10 +123,10 @@ class StatusViewModel(
         if (text.isBlank()) return
         _uiState.update { it.copy(isPosting = true, errorMessage = null, showTextStatusDialog = false) }
         viewModelScope.launch {
-            val result = statusRepository.postTextStatus(text)
-            result.onSuccess {
+            val result: Result<UserStatus> = statusRepository.postTextStatus(text)
+            result.onSuccess { _: UserStatus ->
                 _uiState.update { it.copy(isPosting = false) }
-            }.onFailure { err ->
+            }.onFailure { err: Throwable ->
                 _uiState.update { it.copy(isPosting = false, errorMessage = err.localizedMessage) }
             }
         }
@@ -135,10 +135,10 @@ class StatusViewModel(
     fun postImageStatus(imageBytes: ByteArray, caption: String?) {
         _uiState.update { it.copy(isPosting = true, errorMessage = null, showCreateMenu = false) }
         viewModelScope.launch {
-            val result = statusRepository.postMediaStatus(imageBytes, caption)
-            result.onSuccess {
+            val result: Result<UserStatus> = statusRepository.postMediaStatus(imageBytes, caption)
+            result.onSuccess { _: UserStatus ->
                 _uiState.update { it.copy(isPosting = false) }
-            }.onFailure { err ->
+            }.onFailure { err: Throwable ->
                 _uiState.update { it.copy(isPosting = false, errorMessage = err.localizedMessage) }
             }
         }
@@ -146,8 +146,12 @@ class StatusViewModel(
 
     fun deleteStatus(statusId: String) {
         viewModelScope.launch {
-            statusRepository.deleteStatus(statusId)
-            _uiState.update { it.copy(previewingStatus = null) }
+            val result: Result<Unit> = statusRepository.deleteStatus(statusId)
+            result.onSuccess { _: Unit ->
+                _uiState.update { it.copy(previewingStatus = null) }
+            }.onFailure { err: Throwable ->
+                _uiState.update { it.copy(errorMessage = err.localizedMessage) }
+            }
         }
     }
 }
