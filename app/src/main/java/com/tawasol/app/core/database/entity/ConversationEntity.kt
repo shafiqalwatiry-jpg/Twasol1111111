@@ -1,10 +1,17 @@
 package com.tawasol.app.core.database.entity
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.time.Instant
 
-@Entity(tableName = "conversations")
+@Entity(
+    tableName = "conversations",
+    indices = [
+        Index(value = ["accountUserId"]),
+        Index(value = ["peerUserId"])
+    ]
+)
 data class ConversationEntity(
     @PrimaryKey
     val id: String,
@@ -18,6 +25,7 @@ data class ConversationEntity(
     val unreadCount: Int = 0,
     val isPinned: Boolean = false,
     val isMuted: Boolean = false,
+    val accountUserId: String = "",
     val createdAt: Instant = Instant.now(),
     val updatedAt: Instant = Instant.now()
 )

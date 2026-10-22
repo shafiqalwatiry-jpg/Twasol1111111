@@ -64,8 +64,12 @@ class HomeViewModel(
     private val getConversationsUseCase: GetConversationsUseCase,
     private val authRepository: AuthRepository,
     private val chatRepository: com.tawasol.app.domain.repository.ChatRepository? = null,
-    private val ensureE2EESetupUseCase: com.tawasol.app.domain.usecase.EnsureE2EESetupUseCase? = null
+    private val ensureE2EESetupUseCase: com.tawasol.app.domain.usecase.EnsureE2EESetupUseCase? = null,
+    val statusRepository: com.tawasol.app.domain.repository.StatusRepository? = null
 ) : ViewModel() {
+
+    val statusViewModel: com.tawasol.app.presentation.home.tabs.StatusViewModel? =
+        statusRepository?.let { com.tawasol.app.presentation.home.tabs.StatusViewModel(it) }
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
@@ -225,7 +229,10 @@ fun HomeScreen(
                     onNewChatClick = onNavigateToUserSearch
                 )
                 HomeTab.CALLS -> CallsTab()
-                HomeTab.STATUS -> StatusTab()
+                HomeTab.STATUS -> StatusTab(
+                    currentUser = state.currentUser,
+                    statusViewModel = viewModel.statusViewModel
+                )
                 HomeTab.SETTINGS -> SettingsTab(
                     currentUser = state.currentUser,
                     onProfileClick = { onNavigateToProfile("self") },

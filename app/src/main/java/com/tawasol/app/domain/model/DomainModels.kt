@@ -93,3 +93,17 @@ data class SafetyNumber(
     val isVerified: Boolean = false
 )
 
+data class UserStatus(
+    val id: String,
+    val userId: String,
+    val userDisplayName: String = "",
+    val userAvatarUrl: String? = null,
+    val text: String? = null,
+    val mediaUrl: String? = null,
+    val statusType: String = "text", // "text", "image", "video"
+    val createdAt: Instant = Instant.now(),
+    val expiresAt: Instant = Instant.now().plusSeconds(86400),
+    val viewCount: Int = 0,
+    val isSelf: Boolean = false
+)
+

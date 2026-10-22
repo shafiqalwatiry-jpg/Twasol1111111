@@ -269,15 +269,23 @@ CREATE POLICY "Users can update own privacy settings" ON public.privacy_settings
 CREATE POLICY "Users can insert own privacy settings" ON public.privacy_settings
     FOR INSERT WITH CHECK (auth.uid() = user_id);
 
+-- Helper function to break RLS recursion on conversation_members
+CREATE OR REPLACE FUNCTION public.is_conversation_member(p_conversation_id UUID, p_user_id UUID)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM public.conversation_members
+        WHERE conversation_id = p_conversation_id AND user_id = p_user_id
+    );
+$$;
+
 -- Conversation Members: Members can view the conversation
 CREATE POLICY "Members can view conversations" ON public.conversations
-    FOR SELECT USING (
-        EXISTS (
-            SELECT 1 FROM public.conversation_members
-            WHERE conversation_members.conversation_id = conversations.id
-            AND conversation_members.user_id = auth.uid()
-        )
-    );
+    FOR SELECT USING (public.is_conversation_member(id, auth.uid()));
 
 CREATE POLICY "Authenticated users can create conversations" ON public.conversations
     FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
@@ -285,38 +293,29 @@ CREATE POLICY "Authenticated users can create conversations" ON public.conversat
 -- Conversation Members table
 CREATE POLICY "Members can view conversation participants" ON public.conversation_members
     FOR SELECT USING (
-        EXISTS (
-            SELECT 1 FROM public.conversation_members AS cm
-            WHERE cm.conversation_id = conversation_members.conversation_id
-            AND cm.user_id = auth.uid()
-        )
+        user_id = auth.uid() OR public.is_conversation_member(conversation_id, auth.uid())
     );
 
 CREATE POLICY "Users can join or be added to conversations" ON public.conversation_members
-    FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+    FOR INSERT WITH CHECK (
+        auth.uid() IS NOT NULL AND (
+            user_id = auth.uid() OR public.is_conversation_member(conversation_id, auth.uid())
+        )
+    );
 
 -- Messages: Only conversation members can read and write messages
 CREATE POLICY "Members can read messages in conversation" ON public.messages
-    FOR SELECT USING (
-        EXISTS (
-            SELECT 1 FROM public.conversation_members
-            WHERE conversation_members.conversation_id = messages.conversation_id
-            AND conversation_members.user_id = auth.uid()
-        )
-    );
+    FOR SELECT USING (public.is_conversation_member(conversation_id, auth.uid()));
 
 CREATE POLICY "Members can insert messages in conversation" ON public.messages
     FOR INSERT WITH CHECK (
         sender_id = auth.uid() AND
-        EXISTS (
-            SELECT 1 FROM public.conversation_members
-            WHERE conversation_members.conversation_id = messages.conversation_id
-            AND conversation_members.user_id = auth.uid()
-        )
+        public.is_conversation_member(conversation_id, auth.uid())
     );
 
 CREATE POLICY "Users can update own sent messages" ON public.messages
-    FOR UPDATE USING (sender_id = auth.uid());
+    FOR UPDATE USING (sender_id = auth.uid())
+    WITH CHECK (sender_id = auth.uid());
 
 -- Blocks
 CREATE POLICY "Users can view and manage their blocklist" ON public.blocks

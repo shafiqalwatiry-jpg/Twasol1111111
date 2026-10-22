@@ -69,3 +69,11 @@ interface ChatRepository {
     suspend fun ensureE2EESetup(): Result<Unit>
     suspend fun getSafetyNumber(peerUserId: String): Result<SafetyNumber>
 }
+
+interface StatusRepository {
+    fun getActiveStatuses(): Flow<List<UserStatus>>
+    suspend fun postTextStatus(text: String): Result<UserStatus>
+    suspend fun postMediaStatus(imageBytes: ByteArray, caption: String?): Result<UserStatus>
+    suspend fun deleteStatus(statusId: String): Result<Unit>
+    suspend fun markStatusViewed(statusId: String): Result<Unit>
+}

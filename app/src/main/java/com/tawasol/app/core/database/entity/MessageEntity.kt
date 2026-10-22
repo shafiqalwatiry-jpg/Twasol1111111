@@ -9,6 +9,7 @@ import java.time.Instant
     tableName = "messages",
     indices = [
         Index(value = ["conversationId"]),
+        Index(value = ["accountUserId"]),
         Index(value = ["createdAt"])
     ]
 )
@@ -27,6 +28,7 @@ data class MessageEntity(
     val durationSeconds: Int? = null,
     val isEdited: Boolean = false,
     val isDeleted: Boolean = false,
+    val accountUserId: String = "",
     val createdAt: Instant = Instant.now(),
     val updatedAt: Instant = Instant.now()
 )

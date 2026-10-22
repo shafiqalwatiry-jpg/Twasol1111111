@@ -12,6 +12,8 @@ import com.tawasol.app.core.database.dao.PrivacySettingsDao
 import com.tawasol.app.core.database.dao.UserDao
 import com.tawasol.app.core.database.entity.ConversationEntity
 import com.tawasol.app.core.database.entity.MessageEntity
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.tawasol.app.core.database.entity.OutboxMessageEntity
 import com.tawasol.app.core.database.entity.PrivacySettingsEntity
 import com.tawasol.app.core.database.entity.UserEntity
@@ -24,7 +26,7 @@ import com.tawasol.app.core.database.entity.UserEntity
         MessageEntity::class,
         OutboxMessageEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(DateConverters::class)
@@ -38,6 +40,16 @@ abstract class TawasolDatabase : RoomDatabase() {
     companion object {
         private const val DATABASE_NAME = "tawasol.db"
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Safely add accountUserId column and indices without deleting existing messages or conversations
+                db.execSQL("ALTER TABLE conversations ADD COLUMN accountUserId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_conversations_accountUserId ON conversations(accountUserId)")
+                db.execSQL("ALTER TABLE messages ADD COLUMN accountUserId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_accountUserId ON messages(accountUserId)")
+            }
+        }
+
         @Volatile
         private var INSTANCE: TawasolDatabase? = null
 
@@ -48,7 +60,7 @@ abstract class TawasolDatabase : RoomDatabase() {
                     TawasolDatabase::class.java,
                     DATABASE_NAME
                 )
-                    .fallbackToDestructiveMigration()
+                    .addMigrations(MIGRATION_3_4)
                     .build()
                 INSTANCE = instance
                 instance

@@ -9,9 +9,11 @@ import com.tawasol.app.core.security.KeystoreManager
 import com.tawasol.app.core.supabase.SupabaseClientProvider
 import com.tawasol.app.data.repository.AuthRepositoryImpl
 import com.tawasol.app.data.repository.ChatRepositoryImpl
+import com.tawasol.app.data.repository.StatusRepositoryImpl
 import com.tawasol.app.data.repository.UserRepositoryImpl
 import com.tawasol.app.domain.repository.AuthRepository
 import com.tawasol.app.domain.repository.ChatRepository
+import com.tawasol.app.domain.repository.StatusRepository
 import com.tawasol.app.domain.repository.UserRepository
 import com.tawasol.app.domain.usecase.AddGroupMemberUseCase
 import com.tawasol.app.domain.usecase.CreateGroupUseCase
@@ -43,6 +45,7 @@ interface AppContainer {
     val authRepository: AuthRepository
     val chatRepository: ChatRepository
     val userRepository: UserRepository
+    val statusRepository: StatusRepository
     val loginUseCase: LoginUseCase
     val registerUseCase: RegisterUseCase
     val searchUsersUseCase: SearchUsersUseCase
@@ -104,6 +107,13 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
 
     override val userRepository: UserRepository by lazy {
         UserRepositoryImpl(database, supabaseProvider, keystoreManager)
+    }
+
+    override val statusRepository: StatusRepository by lazy {
+        StatusRepositoryImpl(
+            supabaseProvider = supabaseProvider,
+            currentUserIdProvider = { keystoreManager.getCurrentUserId() }
+        )
     }
 
     override val loginUseCase: LoginUseCase by lazy {

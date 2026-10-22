@@ -1,5 +1,10 @@
 package com.tawasol.app.presentation.chat
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -26,6 +31,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -286,6 +294,40 @@ class ChatViewModel(
         }
     }
 
+    fun sendRealMedia(
+        fileBytes: ByteArray,
+        fileName: String,
+        mimeType: String,
+        messageType: MessageType,
+        caption: String? = null,
+        durationSeconds: Int? = null
+    ) {
+        _uiState.update { it.copy(showAttachmentSheet = false, isSending = true, errorMessage = null) }
+        viewModelScope.launch {
+            val replyToId = _uiState.value.replyingToMessage?.id
+            val result = chatRepository.sendMediaMessage(
+                conversationId = conversationId,
+                fileBytes = fileBytes,
+                fileName = fileName,
+                mimeType = mimeType,
+                messageType = messageType,
+                caption = caption,
+                replyToId = replyToId,
+                durationSeconds = durationSeconds
+            )
+            result.onSuccess {
+                _uiState.update { it.copy(isSending = false, replyingToMessage = null) }
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        isSending = false,
+                        errorMessage = error.localizedMessage ?: "فشل إرسال الملف"
+                    )
+                }
+            }
+        }
+    }
+
     fun sendSimulatedImage(caption: String? = null) {
         _uiState.update { it.copy(showAttachmentSheet = false, isSending = true) }
         viewModelScope.launch {
@@ -407,12 +449,48 @@ fun ChatScreen(
     onNavigateToUserProfile: (String) -> Unit = {},
     onNavigateToSafetyNumber: (String) -> Unit = {}
 ) {
+    val context = LocalContext.current
     val state by viewModel.uiState.collectAsState()
     val messagesList by viewModel.messages.collectAsState()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var showMenu by remember { mutableStateOf(false) }
+    var showEmojiSheet by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            if (bytes != null) {
+                viewModel.sendRealMedia(
+                    fileBytes = bytes,
+                    fileName = "photo_${System.currentTimeMillis()}.jpg",
+                    mimeType = "image/jpeg",
+                    messageType = MessageType.IMAGE,
+                    caption = "صورة ملتقطة"
+                )
+            }
+        }
+    }
+
+    val documentPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            if (bytes != null) {
+                viewModel.sendRealMedia(
+                    fileBytes = bytes,
+                    fileName = "doc_${System.currentTimeMillis()}",
+                    mimeType = "application/octet-stream",
+                    messageType = MessageType.FILE,
+                    caption = "مستند مرفق"
+                )
+            }
+        }
+    }
 
     LaunchedEffect(messagesList.size) {
         if (messagesList.isNotEmpty()) {
@@ -436,20 +514,45 @@ fun ChatScreen(
             containerColor = MaterialTheme.colorScheme.surface
         ) {
             WhatsAppAttachmentSheet(
-                onSendCamera = { viewModel.sendSimulatedImage("صورة من الكاميرا 📷") },
-                onSendGallery = { viewModel.sendSimulatedImage("صورة من المعرض 🖼️") },
-                onSendAudio = { viewModel.stopAndSendVoiceRecording() },
-                onSendDocument = { viewModel.sendSimulatedDocument("مستند_تواصل_مشفر.pdf") },
+                onSendCamera = {
+                    viewModel.setAttachmentSheetVisible(false)
+                    photoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onSendGallery = {
+                    viewModel.setAttachmentSheetVisible(false)
+                    photoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                    )
+                },
+                onSendAudio = {
+                    viewModel.setAttachmentSheetVisible(false)
+                    viewModel.stopAndSendVoiceRecording()
+                },
+                onSendDocument = {
+                    viewModel.setAttachmentSheetVisible(false)
+                    documentPickerLauncher.launch(arrayOf("*/*"))
+                },
                 onSendLocation = {
                     viewModel.onInputTextChange("📍 موقعي المباشر: صنعاء، اليمن (15.3694° N, 44.1910° E)")
                     viewModel.setAttachmentSheetVisible(false)
                 },
                 onSendContact = {
-                    viewModel.onInputTextChange("👤 جهة اتصال: المهندس شفيق (@shafiq)")
+                    viewModel.onInputTextChange("👤 جهة اتصال: ${state.conversation?.title ?: "مستخدم تواصل"}")
                     viewModel.setAttachmentSheetVisible(false)
                 }
             )
         }
+    }
+
+    if (showEmojiSheet) {
+        EmojiPickerSheet(
+            onDismiss = { showEmojiSheet = false },
+            onEmojiSelected = { emoji ->
+                viewModel.onInputTextChange(state.inputText + emoji)
+            }
+        )
     }
 
     Scaffold(
@@ -718,7 +821,7 @@ fun ChatScreen(
                                     // Emoji Picker Icon
                                     IconButton(
                                         onClick = {
-                                            viewModel.onInputTextChange(state.inputText + " 😊 ")
+                                            showEmojiSheet = true
                                         },
                                         modifier = Modifier.size(36.dp)
                                     ) {
@@ -1511,3 +1614,112 @@ private fun formatTime(instant: Instant): String {
         ""
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EmojiPickerSheet(
+    onDismiss: () -> Unit,
+    onEmojiSelected: (String) -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState()
+    val emojiCategories = remember {
+        listOf(
+            "ابتسامات" to listOf(
+                "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇",
+                "🙂", "🙃", "😉", "😌", "😍", "🥰", "😘", "😗", "😙", "😚",
+                "😋", "😛", "😜", "🤪", "😝", "🤑", "🤗", "🤭", "🤫", "🤔",
+                "🤐", "🤨", "😐", "😑", "😶", "😏", "😒", "🙄", "😬", "🤥",
+                "😌", "😔", "😪", "🤤", "😴", "😷", "🤒", "🤕", "🤢", "🤮",
+                "🤧", "🥵", "🥶", "🥴", "😵", "🤯", "🤠", "🥳", "😎", "🤓"
+            ),
+            "تفاعل وأيدي" to listOf(
+                "👍", "👎", "👌", "🤌", "✌️", "🤞", "🫰", "🤟", "🤘", "🤙",
+                "👈", "👉", "👆", "🖕", "👇", "☝️", "🫵", "👋", "🤚", "🖐️",
+                "✋", "🖖", "👏", "🙌", "👐", "🤲", "🤝", "🙏", "✍️", "💪"
+            ),
+            "قلوب ومشاعر" to listOf(
+                "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "🤎", "💔",
+                "❤️‍🔥", "❤️‍🩹", "💕", "💞", "💓", "💗", "💖", "💘", "💝", "💟",
+                "✨", "⭐", "🌟", "💫", "🔥", "💯"
+            ),
+            "أشياء ويوميات" to listOf(
+                "☕", "🍕", "🍔", "🍎", "🌸", "🌹", "🌺", "🌻", "🌴", "☀️",
+                "🌙", "⭐", "🎉", "🎊", "🎁", "🎈", "📱", "💻", "📷", "💡",
+                "🔑", "🚗", "✈️", "🚀", "⚽", "🏆", "🎮", "📚", "💼", "💰"
+            )
+        )
+    }
+    var selectedCategoryIndex by remember { mutableIntStateOf(0) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Text(
+                text = "الرموز التعبيرية والملصقات",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            // Category Chips
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                emojiCategories.forEachIndexed { index, (title, _) ->
+                    val isSelected = selectedCategoryIndex == index
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (isSelected) TealPrimary else MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.clickable { selectedCategoryIndex = index }
+                    ) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            ),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+            }
+
+            // Emoji Grid
+            val currentEmojis = emojiCategories[selectedCategoryIndex].second
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 42.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(260.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(currentEmojis) { emoji ->
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                onEmojiSelected(emoji)
+                                onDismiss()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(text = emoji, fontSize = 24.sp)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+

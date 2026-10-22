@@ -94,7 +94,13 @@ class ChatRepositoryImpl(
     private val json = Json { ignoreUnknownKeys = true }
 
     override fun getConversations(): Flow<List<Conversation>> {
-        return database.conversationDao().getAllConversations().map { entities ->
+        val currentUserId = currentUserIdProvider()
+        val daoFlow = if (!currentUserId.isNullOrBlank()) {
+            database.conversationDao().getConversationsForAccount(currentUserId)
+        } else {
+            database.conversationDao().getAllConversations()
+        }
+        return daoFlow.map { entities ->
             entities.map { entity ->
                 Conversation(
                     id = entity.id,
@@ -114,7 +120,13 @@ class ChatRepositoryImpl(
     }
 
     override fun getConversation(conversationId: String): Flow<Conversation?> {
-        return database.conversationDao().getConversationFlow(conversationId).map { entity ->
+        val currentUserId = currentUserIdProvider()
+        val daoFlow = if (!currentUserId.isNullOrBlank()) {
+            database.conversationDao().getConversationFlowForAccount(conversationId, currentUserId)
+        } else {
+            database.conversationDao().getConversationFlow(conversationId)
+        }
+        return daoFlow.map { entity ->
             entity?.let {
                 Conversation(
                     id = it.id,
@@ -134,7 +146,13 @@ class ChatRepositoryImpl(
     }
 
     override fun getMessages(conversationId: String, limit: Int): Flow<List<Message>> {
-        return database.messageDao().getMessagesPaged(conversationId, limit).map { entities ->
+        val currentUserId = currentUserIdProvider()
+        val daoFlow = if (!currentUserId.isNullOrBlank()) {
+            database.messageDao().getMessagesPagedForAccount(conversationId, currentUserId, limit)
+        } else {
+            database.messageDao().getMessagesPaged(conversationId, limit)
+        }
+        return daoFlow.map { entities ->
             entities.map { entity ->
                 Message(
                     id = entity.id,
@@ -216,6 +234,7 @@ class ChatRepositoryImpl(
                 peerUsername = peerUsername,
                 lastMessageText = null,
                 lastMessageTimestamp = Instant.now(),
+                accountUserId = currentUserId,
                 createdAt = Instant.now(),
                 updatedAt = Instant.now()
             )
@@ -232,6 +251,7 @@ class ChatRepositoryImpl(
                 avatarUrl = peerAvatar,
                 peerUserId = otherUserId,
                 peerUsername = peerUsername,
+                accountUserId = currentUserId,
                 createdAt = Instant.now(),
                 updatedAt = Instant.now()
             )
@@ -265,6 +285,7 @@ class ChatRepositoryImpl(
             messageType = "text",
             status = "sending",
             replyToMessageId = replyToId,
+            accountUserId = currentUserId,
             createdAt = now
         )
         database.messageDao().insertMessage(localMessage)
@@ -387,6 +408,7 @@ class ChatRepositoryImpl(
             replyToMessageId = replyToId,
             fileSize = fileBytes.size.toLong(),
             durationSeconds = durationSeconds,
+            accountUserId = currentUserId,
             createdAt = now
         )
         database.messageDao().insertMessage(localMessage)
@@ -538,6 +560,7 @@ class ChatRepositoryImpl(
                     messageType = dto.message_type,
                     status = "sent",
                     replyToMessageId = dto.reply_to_message_id,
+                    accountUserId = currentUserId ?: "",
                     createdAt = parseInstantOrNow(dto.created_at)
                 )
             }
@@ -585,6 +608,7 @@ class ChatRepositoryImpl(
                                 messageType = dto.message_type,
                                 status = "sent",
                                 replyToMessageId = dto.reply_to_message_id,
+                                accountUserId = currentUserId ?: "",
                                 createdAt = now
                             )
                             database.messageDao().insertMessage(entity)
@@ -705,6 +729,7 @@ class ChatRepositoryImpl(
                     peerUsername = peerUsername,
                     lastMessageText = decryptedLastMsg,
                     lastMessageTimestamp = convo.last_message_at?.let { parseInstantOrNow(it) },
+                    accountUserId = currentUserId,
                     createdAt = convo.created_at?.let { parseInstantOrNow(it) } ?: Instant.now(),
                     updatedAt = convo.updated_at?.let { parseInstantOrNow(it) } ?: Instant.now()
                 )
@@ -735,6 +760,7 @@ class ChatRepositoryImpl(
                                 messageType = dto.message_type,
                                 status = "sent",
                                 replyToMessageId = dto.reply_to_message_id,
+                                accountUserId = currentUserId,
                                 createdAt = parseInstantOrNow(dto.created_at)
                             )
                         }

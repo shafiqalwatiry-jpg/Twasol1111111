@@ -140,7 +140,8 @@ fun AppNavGraph(
                     getConversationsUseCase = appContainer.getConversationsUseCase,
                     authRepository = appContainer.authRepository,
                     chatRepository = appContainer.chatRepository,
-                    ensureE2EESetupUseCase = appContainer.ensureE2EESetupUseCase
+                    ensureE2EESetupUseCase = appContainer.ensureE2EESetupUseCase,
+                    statusRepository = appContainer.statusRepository
                 )
             }
             HomeScreen(
