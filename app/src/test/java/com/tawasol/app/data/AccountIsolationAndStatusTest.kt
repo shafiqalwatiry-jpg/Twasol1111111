@@ -2,8 +2,6 @@ package com.tawasol.app.data
 
 import com.tawasol.app.core.database.entity.ConversationEntity
 import com.tawasol.app.core.database.entity.MessageEntity
-import com.tawasol.app.domain.model.MessageStatus
-import com.tawasol.app.domain.model.MessageType
 import com.tawasol.app.domain.model.UserStatus
 import com.tawasol.app.domain.repository.StatusRepository
 import kotlinx.coroutines.flow.Flow
@@ -197,8 +195,8 @@ class AccountIsolationAndStatusTest {
                 conversationId = "convo_1",
                 senderId = userA,
                 text = "بيانات سرية للمستخدم أ",
-                type = MessageType.TEXT,
-                status = MessageStatus.READ,
+                messageType = "text",
+                status = "read",
                 createdAt = Instant.now()
             )
         )
