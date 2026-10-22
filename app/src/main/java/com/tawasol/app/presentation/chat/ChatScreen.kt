@@ -1301,9 +1301,10 @@ fun MessageBubble(
                     MessageType.IMAGE -> {
                         // Image Attachment Bubble
                         Column {
-                            if (!message.mediaUrl.isNullOrBlank()) {
+                            val imageSource = message.mediaUrl?.takeIf { it.isNotBlank() } ?: message.localFilePath
+                            if (!imageSource.isNullOrBlank()) {
                                 AsyncImage(
-                                    model = message.mediaUrl,
+                                    model = imageSource,
                                     contentDescription = "صورة مرفقة",
                                     modifier = Modifier
                                         .fillMaxWidth()

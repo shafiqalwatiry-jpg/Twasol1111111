@@ -37,6 +37,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.put
+import android.content.Context
+import java.io.File
+import java.io.IOException
 import java.time.Instant
 import java.util.UUID
 
@@ -88,10 +91,23 @@ class ChatRepositoryImpl(
     private val networkMonitor: NetworkMonitor,
     private val e2eeManager: E2EEManager,
     private val keystoreManager: KeystoreManager,
-    private val currentUserIdProvider: () -> String?
+    private val currentUserIdProvider: () -> String?,
+    private val context: Context? = null,
+    private val mediaStorageDir: File? = null
 ) : ChatRepository {
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    private fun getMediaDirectory(userId: String): File {
+        val baseDir = mediaStorageDir
+            ?: context?.let { File(it.filesDir, "chat_media") }
+            ?: File(System.getProperty("java.io.tmpdir") ?: ".", "tawasol_chat_media")
+        val userDir = File(baseDir, userId)
+        if (!userDir.exists()) {
+            userDir.mkdirs()
+        }
+        return userDir
+    }
 
     override fun getConversations(): Flow<List<Conversation>> {
         val currentUserId = currentUserIdProvider()
@@ -372,14 +388,15 @@ class ChatRepositoryImpl(
                 )
             )
         } catch (e: Exception) {
-            // Update status to failed and queue in outbox
+            // Update status to failed and queue in outbox with proper account isolation
             database.messageDao().insertOutboxMessage(
                 OutboxMessageEntity(
                     localId = localId,
                     conversationId = conversationId,
                     text = outboundText,
                     messageType = "text",
-                    lastError = e.message
+                    lastError = e.message,
+                    accountUserId = currentUserId
                 )
             )
             database.messageDao().updateMessageStatus(localId, "failed")
@@ -400,6 +417,10 @@ class ChatRepositoryImpl(
         val currentUserId = currentUserIdProvider()
             ?: return@withContext Result.failure(Exception("يجب تسجيل الدخول لإرسال الملفات"))
 
+        if (fileBytes.isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("الملف المختار فارغ ولا يمكن إرساله"))
+        }
+
         val localId = UUID.randomUUID().toString()
         val now = Instant.now()
         val typeStr = when (messageType) {
@@ -408,6 +429,27 @@ class ChatRepositoryImpl(
             else -> "file"
         }
 
+        // 1. Save file bytes permanently to app-private storage isolated per user account
+        val userMediaDir = getMediaDirectory(currentUserId)
+        val safeExt = when {
+            fileName.contains('.') -> fileName.substringAfterLast('.').lowercase().take(8)
+            messageType == MessageType.IMAGE -> "jpg"
+            messageType == MessageType.AUDIO -> "m4a"
+            else -> "bin"
+        }
+        val safeLocalFileName = "${localId}_${System.currentTimeMillis()}.$safeExt"
+        val localMediaFile = File(userMediaDir, safeLocalFileName)
+
+        try {
+            localMediaFile.writeBytes(fileBytes)
+        } catch (e: Exception) {
+            return@withContext Result.failure(
+                IOException("فشل حفظ الملف محلياً في مساحة التخزين الخاصة بالتطبيق: ${e.localizedMessage ?: "خطأ في الكتابة"}")
+            )
+        }
+        val localFilePath = localMediaFile.absolutePath
+
+        // 2. Insert into local Room database with localFilePath and status="sending"
         val localMessage = MessageEntity(
             id = localId,
             conversationId = conversationId,
@@ -416,6 +458,7 @@ class ChatRepositoryImpl(
             messageType = typeStr,
             status = "sending",
             replyToMessageId = replyToId,
+            localFilePath = localFilePath,
             fileSize = fileBytes.size.toLong(),
             durationSeconds = durationSeconds,
             accountUserId = currentUserId,
@@ -429,7 +472,7 @@ class ChatRepositoryImpl(
         }
         database.conversationDao().updateLastMessage(conversationId, caption ?: defaultLast, now)
 
-        // 2. Perform End-to-End Encryption on caption if direct chat
+        // 3. Perform End-to-End Encryption on caption if direct chat
         val convo = database.conversationDao().getConversationById(conversationId)
         val peerId = convo?.peerUserId
         val outboundCaption: String = if (!caption.isNullOrBlank() && convo?.type == "direct" && !peerId.isNullOrBlank()) {
@@ -452,8 +495,10 @@ class ChatRepositoryImpl(
             caption ?: ""
         }
 
+        // 4. Check network connectivity
         val isOnline = try { networkMonitor.isOnline.first() } catch (e: Exception) { false }
         if (!isOnline) {
+            // Queue into outbox with localFilePath for automatic sync when internet returns
             database.messageDao().insertOutboxMessage(
                 OutboxMessageEntity(
                     localId = localId,
@@ -473,13 +518,16 @@ class ChatRepositoryImpl(
                     text = caption,
                     type = messageType,
                     status = MessageStatus.SENDING,
-                    createdAt = now
+                    localFilePath = localFilePath,
+                    createdAt = now,
+                    mediaDurationSeconds = durationSeconds
                 )
             )
         }
 
+        // 5. If online, upload to Supabase Storage and insert remote message
         try {
-            val storagePath = "$currentUserId/$conversationId/${System.currentTimeMillis()}_$fileName"
+            val storagePath = "$currentUserId/$conversationId/${localId}_$fileName"
             val bucket = supabaseProvider.client.storage.from("chat-media")
             bucket.upload(path = storagePath, data = fileBytes) {
                 upsert = true
@@ -500,7 +548,9 @@ class ChatRepositoryImpl(
             }
 
             supabaseProvider.postgrest.from(SupabaseConfig.MESSAGES_TABLE).insert(payload)
-            database.messageDao().updateMessageStatus(localId, "sent")
+            database.messageDao().updateMessage(
+                localMessage.copy(status = "sent", mediaUrl = publicUrl)
+            )
 
             Result.success(
                 Message(
@@ -511,12 +561,27 @@ class ChatRepositoryImpl(
                     type = messageType,
                     status = MessageStatus.SENT,
                     mediaUrl = publicUrl,
-                    createdAt = now
+                    localFilePath = localFilePath,
+                    createdAt = now,
+                    mediaDurationSeconds = durationSeconds
                 )
             )
         } catch (e: Exception) {
-            database.messageDao().updateMessageStatus(localId, "failed")
-            Result.failure(Exception("فشل إرسال الملف: ${e.localizedMessage ?: "تحقق من الاتصال"}"))
+            // Network dropped or upload failed: queue in Outbox so it retries automatically
+            database.messageDao().insertOutboxMessage(
+                OutboxMessageEntity(
+                    localId = localId,
+                    conversationId = conversationId,
+                    text = outboundCaption,
+                    messageType = typeStr,
+                    localFilePath = localFilePath,
+                    replyToMessageId = replyToId,
+                    lastError = e.message,
+                    accountUserId = currentUserId
+                )
+            )
+            database.messageDao().updateMessageStatus(localId, "sending")
+            Result.failure(Exception("تعذر إرسال الملف حالياً عبر الشبكة، تم حفظه محلياً وسيتم إرساله تلقائياً: ${e.localizedMessage ?: "تحقق من الاتصال"}"))
         }
     }
 
@@ -893,20 +958,73 @@ class ChatRepositoryImpl(
 
         for (item in pending) {
             try {
-                val payload = buildJsonObject {
-                    put("id", item.localId)
-                    put("conversation_id", item.conversationId)
-                    put("sender_id", currentUserId)
-                    put("text", item.text)
-                    put("message_type", item.messageType)
-                    put("status", "sent")
-                    if (item.replyToMessageId != null) put("reply_to_message_id", item.replyToMessageId)
+                if (!item.localFilePath.isNullOrBlank()) {
+                    val file = File(item.localFilePath)
+                    if (!file.exists() || !file.canRead()) {
+                        // File missing or unreadable; mark failed and record error, do NOT claim sent
+                        database.messageDao().updateMessageStatus(item.localId, "failed")
+                        database.messageDao().insertOutboxMessage(
+                            item.copy(retryCount = item.retryCount + 1, lastError = "الملف غير موجود محلياً أو غير قابل للقراءة")
+                        )
+                        continue
+                    }
+
+                    // 1. Read file bytes from permanent storage
+                    val fileBytes = file.readBytes()
+                    val fileName = file.name
+                    val storagePath = "$currentUserId/${item.conversationId}/${item.localId}_$fileName"
+                    val bucket = supabaseProvider.client.storage.from("chat-media")
+                    bucket.upload(path = storagePath, data = fileBytes) {
+                        upsert = true
+                    }
+                    val publicUrl = bucket.publicUrl(storagePath)
+
+                    // 2. Insert into Supabase messages table
+                    val payload = buildJsonObject {
+                        put("id", item.localId)
+                        put("conversation_id", item.conversationId)
+                        put("sender_id", currentUserId)
+                        put("text", item.text)
+                        put("message_type", item.messageType)
+                        put("status", "sent")
+                        put("media_url", publicUrl)
+                        put("file_size", fileBytes.size.toLong())
+                        if (item.replyToMessageId != null) put("reply_to_message_id", item.replyToMessageId)
+                    }
+
+                    supabaseProvider.postgrest.from(SupabaseConfig.MESSAGES_TABLE).insert(payload)
+
+                    // 3. Update local Room database
+                    val existingMsg = database.messageDao().getMessageById(item.localId)
+                    if (existingMsg != null) {
+                        database.messageDao().updateMessage(
+                            existingMsg.copy(status = "sent", mediaUrl = publicUrl)
+                        )
+                    } else {
+                        database.messageDao().updateMessageStatus(item.localId, "sent")
+                    }
+
+                    // 4. Delete from Outbox queue only AFTER both upload and message insert succeed!
+                    database.messageDao().deleteOutboxMessage(item.localId)
+                } else {
+                    val payload = buildJsonObject {
+                        put("id", item.localId)
+                        put("conversation_id", item.conversationId)
+                        put("sender_id", currentUserId)
+                        put("text", item.text)
+                        put("message_type", item.messageType)
+                        put("status", "sent")
+                        if (item.replyToMessageId != null) put("reply_to_message_id", item.replyToMessageId)
+                    }
+                    supabaseProvider.postgrest.from(SupabaseConfig.MESSAGES_TABLE).insert(payload)
+                    database.messageDao().deleteOutboxMessage(item.localId)
+                    database.messageDao().updateMessageStatus(item.localId, "sent")
                 }
-                supabaseProvider.postgrest.from(SupabaseConfig.MESSAGES_TABLE).insert(payload)
-                database.messageDao().deleteOutboxMessage(item.localId)
-                database.messageDao().updateMessageStatus(item.localId, "sent")
             } catch (e: Exception) {
-                // Keep in outbox, will retry on next sync cycle
+                // Keep in outbox, update retry count
+                database.messageDao().insertOutboxMessage(
+                    item.copy(retryCount = item.retryCount + 1, lastError = e.message)
+                )
             }
         }
         Result.success(Unit)

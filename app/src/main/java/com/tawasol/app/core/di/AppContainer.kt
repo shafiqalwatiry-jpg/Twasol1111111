@@ -107,7 +107,8 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
             networkMonitor = networkMonitor,
             e2eeManager = e2eeManager,
             keystoreManager = keystoreManager,
-            currentUserIdProvider = { keystoreManager.getCurrentUserId() }
+            currentUserIdProvider = { keystoreManager.getCurrentUserId() },
+            context = context.applicationContext
         )
     }
 
