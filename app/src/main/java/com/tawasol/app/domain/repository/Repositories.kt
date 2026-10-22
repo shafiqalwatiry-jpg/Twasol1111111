@@ -7,6 +7,10 @@ import com.tawasol.app.domain.model.PrivacySettings
 import com.tawasol.app.domain.model.SafetyNumber
 import com.tawasol.app.domain.model.User
 import com.tawasol.app.domain.model.UserStatus
+import com.tawasol.app.domain.model.CallSession
+import com.tawasol.app.domain.model.CallType
+import com.tawasol.app.domain.model.FriendRequest
+import com.tawasol.app.domain.model.FriendshipStatus
 import kotlinx.coroutines.flow.Flow
 
 interface AuthRepository {
@@ -77,4 +81,29 @@ interface StatusRepository {
     suspend fun postMediaStatus(imageBytes: ByteArray, caption: String?): Result<UserStatus>
     suspend fun deleteStatus(statusId: String): Result<Unit>
     suspend fun markStatusViewed(statusId: String): Result<Unit>
+}
+
+interface FriendshipRepository {
+    suspend fun sendFriendRequest(targetUserId: String): Result<FriendRequest>
+    suspend fun acceptFriendRequest(requestId: String): Result<Unit>
+    suspend fun rejectFriendRequest(requestId: String): Result<Unit>
+    suspend fun cancelFriendRequest(requestId: String): Result<Unit>
+    suspend fun removeFriend(friendUserId: String): Result<Unit>
+    suspend fun getFriendshipStatus(otherUserId: String): Result<FriendshipStatus>
+    fun getPendingIncomingRequests(): Flow<List<FriendRequest>>
+    fun getPendingOutgoingRequests(): Flow<List<FriendRequest>>
+    fun getFriends(): Flow<List<User>>
+}
+
+interface CallRepository {
+    suspend fun startCall(receiverId: String, conversationId: String?, type: CallType): Result<CallSession>
+    suspend fun acceptCall(callId: String, sdpAnswerJson: String? = null): Result<Unit>
+    suspend fun rejectCall(callId: String): Result<Unit>
+    suspend fun endCall(callId: String): Result<Unit>
+    suspend fun updateSdpOffer(callId: String, sdpOfferJson: String): Result<Unit>
+    suspend fun updateSdpAnswer(callId: String, sdpAnswerJson: String): Result<Unit>
+    suspend fun addIceCandidate(callId: String, candidateJson: String, isCaller: Boolean): Result<Unit>
+    fun getActiveCallFlow(callId: String): Flow<CallSession?>
+    fun getIncomingCallsFlow(): Flow<CallSession?>
+    fun getCallHistory(): Flow<List<CallSession>>
 }

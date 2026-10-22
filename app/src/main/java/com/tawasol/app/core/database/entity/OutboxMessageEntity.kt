@@ -8,7 +8,12 @@ import java.time.Instant
  * Outbox queue for offline-first message synchronization.
  * Messages created when offline are stored here and retried automatically.
  */
-@Entity(tableName = "outbox_messages")
+@Entity(
+    tableName = "outbox_messages",
+    indices = [
+        androidx.room.Index(value = ["accountUserId"])
+    ]
+)
 data class OutboxMessageEntity(
     @PrimaryKey
     val localId: String,
@@ -19,5 +24,6 @@ data class OutboxMessageEntity(
     val replyToMessageId: String? = null,
     val retryCount: Int = 0,
     val lastError: String? = null,
+    val accountUserId: String = "",
     val createdAt: Instant = Instant.now()
 )

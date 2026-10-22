@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.time.Instant
@@ -25,6 +26,8 @@ data class RemoteStatusDto(
     val content_text: String? = null,
     val media_url: String? = null,
     val status_type: String = "text",
+    val background_color: String? = null,
+    val privacy_mode: String? = "friends",
     val created_at: String? = null,
     val expires_at: String? = null
 )
@@ -36,6 +39,11 @@ class StatusRepositoryImpl(
 
     override fun getActiveStatuses(): Flow<List<UserStatus>> = flow {
         val currentUserId = currentUserIdProvider()
+        if (currentUserId.isNullOrBlank()) {
+            emit(emptyList())
+            return@flow
+        }
+
         try {
             val nowIso = Instant.now().toString()
             val remoteList = supabaseProvider.postgrest.from(SupabaseConfig.STATUSES_TABLE)
@@ -58,16 +66,39 @@ class StatusRepositoryImpl(
                     null
                 }
 
+                val viewCount = try {
+                    supabaseProvider.postgrest.from("status_views")
+                        .select { filter { eq("status_id", dto.id) } }
+                        .decodeList<JsonObject>().size
+                } catch (e: Exception) {
+                    0
+                }
+
+                val isViewed = try {
+                    supabaseProvider.postgrest.from("status_views")
+                        .select {
+                            filter {
+                                eq("status_id", dto.id)
+                                eq("viewer_id", currentUserId)
+                            }
+                        }.decodeList<JsonObject>().isNotEmpty()
+                } catch (e: Exception) {
+                    false
+                }
+
                 UserStatus(
                     id = dto.id,
                     userId = dto.user_id,
-                    userDisplayName = profile?.display_name ?: "مستخدم",
+                    userDisplayName = profile?.display_name ?: "مستخدم تواصل",
                     userAvatarUrl = profile?.avatar_url,
                     text = dto.content_text,
                     mediaUrl = dto.media_url,
                     statusType = dto.status_type,
+                    backgroundColor = dto.background_color ?: "#005C4B",
                     createdAt = dto.created_at?.let { parseInstant(it) } ?: Instant.now(),
                     expiresAt = dto.expires_at?.let { parseInstant(it) } ?: Instant.now().plusSeconds(86400),
+                    viewCount = viewCount,
+                    isViewedByMe = isViewed,
                     isSelf = dto.user_id == currentUserId
                 )
             }
@@ -79,11 +110,11 @@ class StatusRepositoryImpl(
 
     override suspend fun postTextStatus(text: String): Result<UserStatus> = withContext(Dispatchers.IO) {
         val currentUserId = currentUserIdProvider()
-            ?: return@withContext Result.failure(Exception("يجب تسجيل الدخول لنشر حالة"))
+            ?: return@withContext Result.failure(IllegalStateException("يجب تسجيل الدخول لنشر حالة"))
 
         val cleanText = text.trim()
         if (cleanText.isEmpty()) {
-            return@withContext Result.failure(Exception("لا يمكن نشر حالة فارغة"))
+            return@withContext Result.failure(IllegalArgumentException("لا يمكن نشر حالة فارغة"))
         }
 
         try {
@@ -93,6 +124,8 @@ class StatusRepositoryImpl(
                 put("user_id", currentUserId)
                 put("content_text", cleanText)
                 put("status_type", "text")
+                put("background_color", "#005C4B")
+                put("privacy_mode", "friends")
             }
 
             supabaseProvider.postgrest.from(SupabaseConfig.STATUSES_TABLE).insert(payload)
@@ -102,6 +135,7 @@ class StatusRepositoryImpl(
                 userId = currentUserId,
                 text = cleanText,
                 statusType = "text",
+                backgroundColor = "#005C4B",
                 isSelf = true
             )
             Result.success(status)
@@ -113,10 +147,10 @@ class StatusRepositoryImpl(
     override suspend fun postMediaStatus(imageBytes: ByteArray, caption: String?): Result<UserStatus> =
         withContext(Dispatchers.IO) {
             val currentUserId = currentUserIdProvider()
-                ?: return@withContext Result.failure(Exception("يجب تسجيل الدخول لنشر حالة"))
+                ?: return@withContext Result.failure(IllegalStateException("يجب تسجيل الدخول لنشر حالة"))
 
             if (imageBytes.isEmpty()) {
-                return@withContext Result.failure(Exception("الملف المختار فارغ"))
+                return@withContext Result.failure(IllegalArgumentException("الملف المختار فارغ"))
             }
 
             try {
@@ -136,6 +170,7 @@ class StatusRepositoryImpl(
                     if (!caption.isNullOrBlank()) put("content_text", caption.trim())
                     put("media_url", publicUrl)
                     put("status_type", "image")
+                    put("privacy_mode", "friends")
                 }
 
                 supabaseProvider.postgrest.from(SupabaseConfig.STATUSES_TABLE).insert(payload)
@@ -156,7 +191,7 @@ class StatusRepositoryImpl(
 
     override suspend fun deleteStatus(statusId: String): Result<Unit> = withContext(Dispatchers.IO) {
         val currentUserId = currentUserIdProvider()
-            ?: return@withContext Result.failure(Exception("يجب تسجيل الدخول"))
+            ?: return@withContext Result.failure(IllegalStateException("يجب تسجيل الدخول"))
 
         try {
             supabaseProvider.postgrest.from(SupabaseConfig.STATUSES_TABLE)
@@ -168,7 +203,7 @@ class StatusRepositoryImpl(
                 }
             Result.success(Unit)
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(Exception("تعذر حذف الحالة: ${e.localizedMessage}"))
         }
     }
 

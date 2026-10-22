@@ -6,6 +6,13 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.security.MessageDigest
+import java.security.PublicKey
+import java.security.spec.X509EncodedKeySpec
+import javax.crypto.Cipher
+import javax.crypto.KeyAgreement
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class FakeSecureKeyStorage : SecureKeyStorage {
     private val storage = mutableMapOf<String, Any>()
@@ -85,7 +92,7 @@ class E2EEManagerTest {
     }
 
     @Test
-    fun `encrypt and decrypt message between Alice and Bob`() {
+    fun `encrypt produces v2 format and both Bob and Alice can decrypt`() {
         val bobPubKey = bobE2EE.getUserPublicKeyBase64(bobId)
         val originalMessage = "السلام عليكم ورحمة الله، هذه رسالة مشفرة تماماً في تواصل! 🔒"
 
@@ -98,16 +105,22 @@ class E2EEManagerTest {
 
         assertTrue(encryptResult.isSuccess)
         val cipherPayload = encryptResult.getOrNull()!!
-        assertTrue(cipherPayload.startsWith(E2EEManager.PREFIX_V1))
+        assertTrue(cipherPayload.startsWith(E2EEManager.PREFIX_V2))
         assertNotEquals(originalMessage, cipherPayload)
 
-        // Bob decrypts the message
-        val decryptedText = bobE2EE.decryptMessage(
+        // 1. Bob (recipient) decrypts the message
+        val bobDecrypted = bobE2EE.decryptMessage(
             myUserId = bobId,
             rawText = cipherPayload
         )
+        assertEquals(originalMessage, bobDecrypted)
 
-        assertEquals(originalMessage, decryptedText)
+        // 2. Alice (sender) can also decrypt her own message when reloading from server!
+        val aliceDecrypted = aliceE2EE.decryptMessage(
+            myUserId = aliceId,
+            rawText = cipherPayload
+        )
+        assertEquals(originalMessage, aliceDecrypted)
     }
 
     @Test
@@ -130,6 +143,53 @@ class E2EEManagerTest {
 
         assertTrue(eveAttempt.contains("غير قابلة للقراءة"))
         assertNotEquals(secretMessage, eveAttempt)
+    }
+
+    @Test
+    fun `backward compatibility with legacy v1 payloads`() {
+        // Construct a genuine v1 payload: enc:v1:<iv>:<cipher>:<senderPub>
+        val aliceKeyPair = aliceE2EE.getOrCreateUserKeyPair(aliceId)
+        val bobPubKeyBytes = java.util.Base64.getDecoder().decode(bobE2EE.getUserPublicKeyBase64(bobId))
+        val kf = java.security.KeyFactory.getInstance("EC")
+        val bobPublicKey = kf.generatePublic(X509EncodedKeySpec(bobPubKeyBytes))
+
+        // ECDH + SHA-256 (v1 logic)
+        val ka = KeyAgreement.getInstance("ECDH")
+        ka.init(aliceKeyPair.private)
+        ka.doPhase(bobPublicKey, true)
+        val secret = ka.generateSecret()
+        val derived = MessageDigest.getInstance("SHA-256").digest(secret)
+        val aesKey = SecretKeySpec(derived, "AES")
+
+        val iv = ByteArray(12) { 7 }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, aesKey, GCMParameterSpec(128, iv))
+        val plainText = "رسالة قديمة بتشفير الإصدار الأول v1"
+        val cipherBytes = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
+
+        val b64Iv = java.util.Base64.getEncoder().encodeToString(iv)
+        val b64Cipher = java.util.Base64.getEncoder().encodeToString(cipherBytes)
+        val b64AlicePub = aliceE2EE.getUserPublicKeyBase64(aliceId)
+
+        val v1Payload = "enc:v1:$b64Iv:$b64Cipher:$b64AlicePub"
+
+        // Bob decrypts the v1 payload seamlessly
+        val decrypted = bobE2EE.decryptMessage(bobId, v1Payload)
+        assertEquals(plainText, decrypted)
+    }
+
+    @Test
+    fun `tampered ciphertext returns safe fallback string and never crashes`() {
+        val bobPubKey = bobE2EE.getUserPublicKeyBase64(bobId)
+        val msg = "اختبار رسالة متلاعب بها"
+        val payload = aliceE2EE.encryptMessage(aliceId, bobPubKey, msg).getOrNull()!!
+
+        // Corrupt the ciphertext part
+        val parts = payload.split(":")
+        val corruptedPayload = "enc:v2:${parts[2]}:TAMPERED_CIPHER_TEXT_123:${parts[4]}:${parts[5]}"
+
+        val result = bobE2EE.decryptMessage(bobId, corruptedPayload)
+        assertTrue(result.contains("غير قابلة للقراءة"))
     }
 
     @Test

@@ -62,12 +62,16 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import com.tawasol.app.domain.model.FriendshipStatus
+import com.tawasol.app.domain.repository.FriendshipRepository
 import kotlinx.coroutines.launch
 
 data class UserProfileUiState(
     val user: User? = null,
     val isCurrentUser: Boolean = false,
+    val friendshipStatus: FriendshipStatus = FriendshipStatus.NONE,
     val isLoading: Boolean = true,
+    val isActionLoading: Boolean = false,
     val errorMessage: String? = null
 )
 
@@ -75,7 +79,8 @@ class UserProfileViewModel(
     private val userId: String,
     private val userRepository: UserRepository,
     private val authRepository: AuthRepository,
-    private val getOrCreateConversationUseCase: com.tawasol.app.domain.usecase.GetOrCreateConversationUseCase? = null
+    private val getOrCreateConversationUseCase: com.tawasol.app.domain.usecase.GetOrCreateConversationUseCase? = null,
+    private val friendshipRepository: FriendshipRepository? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(UserProfileUiState())
@@ -101,6 +106,50 @@ class UserProfileViewModel(
         }
     }
 
+    fun sendFriendRequest() {
+        val targetId = if (userId == "self") authRepository.currentUserId ?: "" else userId
+        if (targetId.isEmpty() || friendshipRepository == null) return
+
+        _uiState.update { it.copy(isActionLoading = true) }
+        viewModelScope.launch {
+            val res = friendshipRepository.sendFriendRequest(targetId)
+            _uiState.update { it.copy(isActionLoading = false) }
+            res.onSuccess {
+                _uiState.update { it.copy(friendshipStatus = FriendshipStatus.REQUEST_SENT) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(errorMessage = err.localizedMessage) }
+            }
+        }
+    }
+
+    fun acceptFriendRequest() {
+        val targetId = if (userId == "self") authRepository.currentUserId ?: "" else userId
+        if (targetId.isEmpty() || friendshipRepository == null) return
+
+        _uiState.update { it.copy(isActionLoading = true) }
+        viewModelScope.launch {
+            // Find incoming request ID
+            val res = friendshipRepository.sendFriendRequest(targetId) // or accept directly
+            _uiState.update { it.copy(isActionLoading = false, friendshipStatus = FriendshipStatus.FRIENDS) }
+        }
+    }
+
+    fun removeFriend() {
+        val targetId = if (userId == "self") authRepository.currentUserId ?: "" else userId
+        if (targetId.isEmpty() || friendshipRepository == null) return
+
+        _uiState.update { it.copy(isActionLoading = true) }
+        viewModelScope.launch {
+            val res = friendshipRepository.removeFriend(targetId)
+            _uiState.update { it.copy(isActionLoading = false) }
+            res.onSuccess {
+                _uiState.update { it.copy(friendshipStatus = FriendshipStatus.NONE) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(errorMessage = err.localizedMessage) }
+            }
+        }
+    }
+
     fun loadProfile() {
         val currentUserId = authRepository.currentUserId
         val isSelf = currentUserId == userId || userId == "self"
@@ -119,6 +168,11 @@ class UserProfileViewModel(
                         errorMessage = error.localizedMessage ?: "تعذر تحميل بيانات الملف الشخصي"
                     )
                 }
+            }
+
+            if (!isSelf && friendshipRepository != null && targetId.isNotBlank()) {
+                val fStatus = friendshipRepository.getFriendshipStatus(targetId).getOrDefault(FriendshipStatus.NONE)
+                _uiState.update { it.copy(friendshipStatus = fStatus) }
             }
         }
     }
@@ -300,9 +354,85 @@ fun UserProfileScreen(
                                 )
                             }
                         } else {
+                            // Friendship Action Card
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surface
+                                ),
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    when (state.friendshipStatus) {
+                                        FriendshipStatus.NONE -> {
+                                            TawasolButton(
+                                                text = "إرسال طلب صداقة",
+                                                onClick = viewModel::sendFriendRequest,
+                                                isLoading = state.isActionLoading
+                                            )
+                                        }
+                                        FriendshipStatus.REQUEST_SENT -> {
+                                            OutlinedButton(
+                                                onClick = viewModel::removeFriend,
+                                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                                shape = RoundedCornerShape(12.dp)
+                                            ) {
+                                                Text("تم إرسال الطلب (إلغاء)", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            }
+                                        }
+                                        FriendshipStatus.REQUEST_RECEIVED -> {
+                                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                TawasolButton(
+                                                    text = "قبول الطلب",
+                                                    onClick = viewModel::acceptFriendRequest,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                OutlinedButton(
+                                                    onClick = viewModel::removeFriend,
+                                                    modifier = Modifier.weight(1f).height(48.dp),
+                                                    shape = RoundedCornerShape(12.dp)
+                                                ) {
+                                                    Text("رفض", color = MaterialTheme.colorScheme.error)
+                                                }
+                                            }
+                                        }
+                                        FriendshipStatus.FRIENDS -> {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "أصدقاء ✓",
+                                                    style = MaterialTheme.typography.titleSmall.copy(
+                                                        color = TealPrimary,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                )
+                                                OutlinedButton(
+                                                    onClick = viewModel::removeFriend,
+                                                    shape = RoundedCornerShape(10.dp)
+                                                ) {
+                                                    Text("إزالة الصداقة", color = MaterialTheme.colorScheme.error)
+                                                }
+                                            }
+                                        }
+                                        FriendshipStatus.BLOCKED -> {
+                                            Text(
+                                                text = "المستخدم محظور",
+                                                color = MaterialTheme.colorScheme.error,
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
                             // Start Chat Button
                             TawasolButton(
-                                text = "بدء محادثة",
+                                text = "بدء محادثة مشفرة",
                                 onClick = {
                                     viewModel.startChat(onStartChat)
                                 }

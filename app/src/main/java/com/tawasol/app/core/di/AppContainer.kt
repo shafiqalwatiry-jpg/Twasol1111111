@@ -13,6 +13,10 @@ import com.tawasol.app.data.repository.StatusRepositoryImpl
 import com.tawasol.app.data.repository.UserRepositoryImpl
 import com.tawasol.app.domain.repository.AuthRepository
 import com.tawasol.app.domain.repository.ChatRepository
+import com.tawasol.app.data.repository.CallRepositoryImpl
+import com.tawasol.app.data.repository.FriendshipRepositoryImpl
+import com.tawasol.app.domain.repository.CallRepository
+import com.tawasol.app.domain.repository.FriendshipRepository
 import com.tawasol.app.domain.repository.StatusRepository
 import com.tawasol.app.domain.repository.UserRepository
 import com.tawasol.app.domain.usecase.AddGroupMemberUseCase
@@ -46,6 +50,8 @@ interface AppContainer {
     val chatRepository: ChatRepository
     val userRepository: UserRepository
     val statusRepository: StatusRepository
+    val friendshipRepository: FriendshipRepository
+    val callRepository: CallRepository
     val loginUseCase: LoginUseCase
     val registerUseCase: RegisterUseCase
     val searchUsersUseCase: SearchUsersUseCase
@@ -111,6 +117,20 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
 
     override val statusRepository: StatusRepository by lazy {
         StatusRepositoryImpl(
+            supabaseProvider = supabaseProvider,
+            currentUserIdProvider = { keystoreManager.getCurrentUserId() }
+        )
+    }
+
+    override val friendshipRepository: FriendshipRepository by lazy {
+        FriendshipRepositoryImpl(
+            supabaseProvider = supabaseProvider,
+            currentUserIdProvider = { keystoreManager.getCurrentUserId() }
+        )
+    }
+
+    override val callRepository: CallRepository by lazy {
+        CallRepositoryImpl(
             supabaseProvider = supabaseProvider,
             currentUserIdProvider = { keystoreManager.getCurrentUserId() }
         )

@@ -166,6 +166,9 @@ CREATE TABLE IF NOT EXISTS public.statuses (
     content_text TEXT,
     media_url TEXT,
     status_type TEXT DEFAULT 'text' CHECK (status_type IN ('text', 'image', 'video')),
+    background_color TEXT DEFAULT '#005C4B',
+    privacy_mode TEXT DEFAULT 'friends' CHECK (privacy_mode IN ('all', 'friends', 'selected', 'except')),
+    allowed_viewer_ids UUID[] DEFAULT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '24 hours')
 );
@@ -180,7 +183,25 @@ CREATE TABLE IF NOT EXISTS public.status_views (
     PRIMARY KEY(status_id, viewer_id)
 );
 
--- 13. CALLS (WebRTC Signaling)
+-- 13. FRIEND REQUESTS & SOCIAL RELATIONSHIPS
+CREATE TABLE IF NOT EXISTS public.friend_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    sender_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    receiver_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled')),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT no_self_friend_request CHECK (sender_id != receiver_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_friend_requests_sender ON public.friend_requests(sender_id);
+CREATE INDEX IF NOT EXISTS idx_friend_requests_receiver ON public.friend_requests(receiver_id);
+CREATE INDEX IF NOT EXISTS idx_friend_requests_status ON public.friend_requests(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_active_friendship
+    ON public.friend_requests (LEAST(sender_id, receiver_id), GREATEST(sender_id, receiver_id))
+    WHERE status IN ('pending', 'accepted');
+
+-- 14. CALLS (WebRTC Signaling)
 CREATE TABLE IF NOT EXISTS public.calls (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     caller_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -190,6 +211,8 @@ CREATE TABLE IF NOT EXISTS public.calls (
     status call_status_enum NOT NULL DEFAULT 'outgoing',
     webrtc_sdp_offer JSONB,
     webrtc_sdp_answer JSONB,
+    caller_ice_candidates JSONB DEFAULT '[]'::jsonb,
+    receiver_ice_candidates JSONB DEFAULT '[]'::jsonb,
     started_at TIMESTAMPTZ,
     ended_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW()

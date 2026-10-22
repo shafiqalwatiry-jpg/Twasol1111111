@@ -113,3 +113,60 @@ data class UserStatus(
     val viewsCount: Int get() = viewCount
 }
 
+data class FriendRequest(
+    val id: String,
+    val senderId: String,
+    val senderUsername: String = "",
+    val senderDisplayName: String = "",
+    val senderAvatarUrl: String? = null,
+    val receiverId: String,
+    val receiverUsername: String = "",
+    val receiverDisplayName: String = "",
+    val receiverAvatarUrl: String? = null,
+    val status: String = "pending", // "pending", "accepted", "rejected", "cancelled"
+    val createdAt: Instant = Instant.now()
+)
+
+enum class FriendshipStatus {
+    NONE,
+    REQUEST_SENT,
+    REQUEST_RECEIVED,
+    FRIENDS,
+    BLOCKED
+}
+
+enum class CallType {
+    VOICE,
+    VIDEO
+}
+
+enum class CallStatus {
+    OUTGOING,
+    INCOMING,
+    RINGING,
+    ACCEPTED,
+    REJECTED,
+    BUSY,
+    MISSED,
+    ENDED
+}
+
+data class CallSession(
+    val id: String,
+    val callerId: String,
+    val callerDisplayName: String = "",
+    val callerAvatarUrl: String? = null,
+    val receiverId: String,
+    val receiverDisplayName: String = "",
+    val receiverAvatarUrl: String? = null,
+    val conversationId: String? = null,
+    val type: CallType = CallType.VOICE,
+    val status: CallStatus = CallStatus.OUTGOING,
+    val sdpOffer: String? = null,
+    val sdpAnswer: String? = null,
+    val startedAt: Instant? = null,
+    val endedAt: Instant? = null,
+    val createdAt: Instant = Instant.now(),
+    val durationSeconds: Long = 0L
+)
+

@@ -43,6 +43,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.Call
+import androidx.compose.material.icons.rounded.CallEnd
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.Check
@@ -57,6 +58,7 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.MicOff
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Person
@@ -66,6 +68,10 @@ import androidx.compose.material.icons.rounded.Reply
 import androidx.compose.material.icons.rounded.SentimentSatisfiedAlt
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Videocam
+import androidx.compose.material.icons.rounded.VideocamOff
+import androidx.compose.material.icons.rounded.VolumeUp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -147,7 +153,11 @@ data class ChatUiState(
     val audioPlaybackProgress: Float = 0f,
     val audioPlaybackSpeed: Float = 1.0f,
     val showAttachmentSheet: Boolean = false,
-    val activeCallMessage: String? = null
+    val activeCallMessage: String? = null,
+    val activeCall: com.tawasol.app.domain.model.CallSession? = null,
+    val isMicMuted: Boolean = false,
+    val isSpeakerOn: Boolean = false,
+    val isCameraOff: Boolean = false
 )
 
 class ChatViewModel(
@@ -158,7 +168,8 @@ class ChatViewModel(
     private val sendMessageUseCase: SendMessageUseCase,
     private val markConversationAsReadUseCase: MarkConversationAsReadUseCase,
     private val authRepository: AuthRepository,
-    private val sendMediaMessageUseCase: SendMediaMessageUseCase? = null
+    private val sendMediaMessageUseCase: SendMediaMessageUseCase? = null,
+    private val callRepository: com.tawasol.app.domain.repository.CallRepository? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -215,6 +226,62 @@ class ChatViewModel(
 
     fun setActiveCallMessage(msg: String?) {
         _uiState.update { it.copy(activeCallMessage = msg) }
+    }
+
+    fun startVoiceCall() {
+        val peerId = _uiState.value.conversation?.peerUserId
+        if (peerId.isNullOrBlank()) {
+            _uiState.update { it.copy(errorMessage = "لا يمكن الاتصال بمحادثة غير فردية") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSending = true, errorMessage = null) }
+            val res = callRepository?.startCall(peerId, conversationId, com.tawasol.app.domain.model.CallType.VOICE)
+            _uiState.update { it.copy(isSending = false) }
+            res?.onSuccess { session ->
+                _uiState.update { it.copy(activeCall = session) }
+            }?.onFailure { err ->
+                _uiState.update { it.copy(errorMessage = err.localizedMessage) }
+            }
+        }
+    }
+
+    fun startVideoCall() {
+        val peerId = _uiState.value.conversation?.peerUserId
+        if (peerId.isNullOrBlank()) {
+            _uiState.update { it.copy(errorMessage = "لا يمكن الاتصال بمحادثة غير فردية") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSending = true, errorMessage = null) }
+            val res = callRepository?.startCall(peerId, conversationId, com.tawasol.app.domain.model.CallType.VIDEO)
+            _uiState.update { it.copy(isSending = false) }
+            res?.onSuccess { session ->
+                _uiState.update { it.copy(activeCall = session) }
+            }?.onFailure { err ->
+                _uiState.update { it.copy(errorMessage = err.localizedMessage) }
+            }
+        }
+    }
+
+    fun endActiveCall() {
+        val call = _uiState.value.activeCall ?: return
+        viewModelScope.launch {
+            callRepository?.endCall(call.id)
+            _uiState.update { it.copy(activeCall = null) }
+        }
+    }
+
+    fun toggleMuteMic() {
+        _uiState.update { it.copy(isMicMuted = !it.isMicMuted) }
+    }
+
+    fun toggleSpeaker() {
+        _uiState.update { it.copy(isSpeakerOn = !it.isSpeakerOn) }
+    }
+
+    fun toggleCamera() {
+        _uiState.update { it.copy(isCameraOff = !it.isCameraOff) }
     }
 
     fun sendMessage() {
@@ -555,6 +622,136 @@ fun ChatScreen(
         )
     }
 
+    if (state.activeCall != null) {
+        Dialog(
+            onDismissRequest = { /* Prevent dismiss on outside tap during active call */ },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF0F1E1B)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(top = 48.dp)
+                    ) {
+                        UserAvatar(
+                            name = state.conversation?.title ?: "مكالمة تواصل",
+                            avatarUrl = state.conversation?.avatarUrl,
+                            size = 100
+                        )
+                        Spacer(modifier = Modifier.height(18.dp))
+                        Text(
+                            text = state.conversation?.title ?: "مستخدم تواصل",
+                            style = MaterialTheme.typography.headlineSmall.copy(
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = if (state.activeCall?.type == com.tawasol.app.domain.model.CallType.VIDEO)
+                                "مكالمة مرئية مشفرة من طرف إلى طرف WebRTC"
+                            else
+                                "مكالمة صوتية مشفرة من طرف إلى طرف WebRTC",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                color = TealPrimary
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "اتصال P2P مباشر عبر STUN • جاري التفاوض...",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                color = Color.White.copy(alpha = 0.6f)
+                            )
+                        )
+                    }
+
+                    // Bottom Control Action Bar
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 32.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Mic Mute Toggle
+                        IconButton(
+                            onClick = viewModel::toggleMuteMic,
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(if (state.isMicMuted) Color.White.copy(alpha = 0.3f) else Color.White.copy(alpha = 0.15f))
+                        ) {
+                            Icon(
+                                imageVector = if (state.isMicMuted) Icons.Rounded.MicOff else Icons.Rounded.Mic,
+                                contentDescription = "كتم الميكروفون",
+                                tint = Color.White
+                            )
+                        }
+
+                        // Speaker Toggle
+                        IconButton(
+                            onClick = viewModel::toggleSpeaker,
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(if (state.isSpeakerOn) TealPrimary else Color.White.copy(alpha = 0.15f))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.VolumeUp,
+                                contentDescription = "مكبر الصوت",
+                                tint = Color.White
+                            )
+                        }
+
+                        // Video camera toggle (if video call)
+                        if (state.activeCall?.type == com.tawasol.app.domain.model.CallType.VIDEO) {
+                            IconButton(
+                                onClick = viewModel::toggleCamera,
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(CircleShape)
+                                    .background(if (state.isCameraOff) Color.White.copy(alpha = 0.3f) else Color.White.copy(alpha = 0.15f))
+                            ) {
+                                Icon(
+                                    imageVector = if (state.isCameraOff) Icons.Rounded.VideocamOff else Icons.Rounded.Videocam,
+                                    contentDescription = "الكاميرا",
+                                    tint = Color.White
+                                )
+                            }
+                        }
+
+                        // End Call Button (Red)
+                        IconButton(
+                            onClick = viewModel::endActiveCall,
+                            modifier = Modifier
+                                .size(64.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFE53935))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.CallEnd,
+                                contentDescription = "إنهاء المكالمة",
+                                tint = Color.White,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Scaffold(
         modifier = Modifier.imePadding(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -617,9 +814,7 @@ fun ChatScreen(
                 },
                 actions = {
                     // Video Call Action
-                    IconButton(onClick = {
-                        viewModel.setActiveCallMessage("جاري بدء مكالمة مرئية مشفرة...")
-                    }) {
+                    IconButton(onClick = viewModel::startVideoCall) {
                         Icon(
                             imageVector = Icons.Rounded.Videocam,
                             contentDescription = "مكالمة مرئية",
@@ -628,9 +823,7 @@ fun ChatScreen(
                     }
 
                     // Voice Call Action
-                    IconButton(onClick = {
-                        viewModel.setActiveCallMessage("جاري بدء مكالمة صوتية مشفرة...")
-                    }) {
+                    IconButton(onClick = viewModel::startVoiceCall) {
                         Icon(
                             imageVector = Icons.Rounded.Call,
                             contentDescription = "مكالمة صوتية",

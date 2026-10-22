@@ -65,7 +65,8 @@ class HomeViewModel(
     private val authRepository: AuthRepository,
     private val chatRepository: com.tawasol.app.domain.repository.ChatRepository? = null,
     private val ensureE2EESetupUseCase: com.tawasol.app.domain.usecase.EnsureE2EESetupUseCase? = null,
-    val statusRepository: com.tawasol.app.domain.repository.StatusRepository? = null
+    val statusRepository: com.tawasol.app.domain.repository.StatusRepository? = null,
+    val callRepository: com.tawasol.app.domain.repository.CallRepository? = null
 ) : ViewModel() {
 
     val statusViewModel: com.tawasol.app.presentation.home.tabs.StatusViewModel? =
@@ -75,6 +76,13 @@ class HomeViewModel(
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     val conversations: StateFlow<List<Conversation>> = getConversationsUseCase()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    val calls: StateFlow<List<com.tawasol.app.domain.model.CallSession>> = (callRepository?.getCallHistory() ?: kotlinx.coroutines.flow.flowOf(emptyList()))
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -146,6 +154,7 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val conversations by viewModel.conversations.collectAsState()
+    val calls by viewModel.calls.collectAsState()
 
     LaunchedEffect(Unit) {
         viewModel.refreshCurrentUser()
@@ -228,7 +237,13 @@ fun HomeScreen(
                     onConversationClick = onNavigateToChatDetail,
                     onNewChatClick = onNavigateToUserSearch
                 )
-                HomeTab.CALLS -> CallsTab()
+                HomeTab.CALLS -> CallsTab(
+                    calls = calls,
+                    currentUserId = state.currentUser?.id,
+                    onStartCall = { peerId, _ ->
+                        onNavigateToProfile(peerId)
+                    }
+                )
                 HomeTab.STATUS -> StatusTab(
                     currentUser = state.currentUser,
                     statusViewModel = viewModel.statusViewModel

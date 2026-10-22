@@ -298,11 +298,20 @@ class ChatRepositoryImpl(
         val peerId = convo?.peerUserId
         val outboundText: String = if (convo?.type == "direct" && !peerId.isNullOrBlank()) {
             val peerPubKey = getOrFetchPeerPublicKey(peerId)
-            if (!peerPubKey.isNullOrBlank()) {
-                e2eeManager.encryptMessage(currentUserId, peerPubKey, cleanText).getOrDefault(cleanText)
-            } else {
-                cleanText
+            if (peerPubKey.isNullOrBlank()) {
+                database.messageDao().updateMessageStatus(localId, "failed")
+                return@withContext Result.failure(
+                    IllegalStateException("تعذر تشفير الرسالة: لم يتم العثور على مفتاح الأمان للطرف الآخر. يرجى إعادة المحاولة.")
+                )
             }
+            val encryptResult = e2eeManager.encryptMessage(currentUserId, peerPubKey, cleanText)
+            if (encryptResult.isFailure) {
+                database.messageDao().updateMessageStatus(localId, "failed")
+                return@withContext Result.failure(
+                    IllegalStateException("فشل تشفير الرسالة: ${encryptResult.exceptionOrNull()?.localizedMessage ?: "خطأ في التشفير"}")
+                )
+            }
+            encryptResult.getOrThrow()
         } else {
             cleanText
         }
@@ -318,7 +327,8 @@ class ChatRepositoryImpl(
                     conversationId = conversationId,
                     text = outboundText,
                     messageType = "text",
-                    replyToMessageId = replyToId
+                    replyToMessageId = replyToId,
+                    accountUserId = currentUserId
                 )
             )
             return@withContext Result.success(
@@ -424,11 +434,20 @@ class ChatRepositoryImpl(
         val peerId = convo?.peerUserId
         val outboundCaption: String = if (!caption.isNullOrBlank() && convo?.type == "direct" && !peerId.isNullOrBlank()) {
             val peerPubKey = getOrFetchPeerPublicKey(peerId)
-            if (!peerPubKey.isNullOrBlank()) {
-                e2eeManager.encryptMessage(currentUserId, peerPubKey, caption).getOrDefault(caption)
-            } else {
-                caption
+            if (peerPubKey.isNullOrBlank()) {
+                database.messageDao().updateMessageStatus(localId, "failed")
+                return@withContext Result.failure(
+                    IllegalStateException("تعذر تشفير وصف الصورة: تعذر العثور على مفتاح الأمان للطرف الآخر")
+                )
             }
+            val encryptResult = e2eeManager.encryptMessage(currentUserId, peerPubKey, caption)
+            if (encryptResult.isFailure) {
+                database.messageDao().updateMessageStatus(localId, "failed")
+                return@withContext Result.failure(
+                    IllegalStateException("فشل تشفير وصف الصورة: ${encryptResult.exceptionOrNull()?.localizedMessage ?: "خطأ في التشفير"}")
+                )
+            }
+            encryptResult.getOrThrow()
         } else {
             caption ?: ""
         }
@@ -441,7 +460,9 @@ class ChatRepositoryImpl(
                     conversationId = conversationId,
                     text = outboundCaption,
                     messageType = typeStr,
-                    replyToMessageId = replyToId
+                    localFilePath = localFilePath,
+                    replyToMessageId = replyToId,
+                    accountUserId = currentUserId
                 )
             )
             return@withContext Result.success(
@@ -868,7 +889,7 @@ class ChatRepositoryImpl(
 
     override suspend fun syncOutbox(): Result<Unit> = withContext(Dispatchers.IO) {
         val currentUserId = currentUserIdProvider() ?: return@withContext Result.success(Unit)
-        val pending = database.messageDao().getAllPendingOutboxMessages()
+        val pending = database.messageDao().getPendingOutboxMessagesForAccount(currentUserId)
 
         for (item in pending) {
             try {

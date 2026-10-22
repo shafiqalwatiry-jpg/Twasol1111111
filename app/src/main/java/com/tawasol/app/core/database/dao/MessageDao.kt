@@ -14,13 +14,13 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC")
     fun getMessagesForConversation(conversationId: String): Flow<List<MessageEntity>>
 
-    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND (accountUserId = :accountUserId OR accountUserId = '') ORDER BY createdAt ASC")
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND accountUserId = :accountUserId ORDER BY createdAt ASC")
     fun getMessagesForConversationForAccount(conversationId: String, accountUserId: String): Flow<List<MessageEntity>>
 
     @Query("SELECT * FROM (SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt DESC LIMIT :limit) ORDER BY createdAt ASC")
     fun getMessagesPaged(conversationId: String, limit: Int): Flow<List<MessageEntity>>
 
-    @Query("SELECT * FROM (SELECT * FROM messages WHERE conversationId = :conversationId AND (accountUserId = :accountUserId OR accountUserId = '') ORDER BY createdAt DESC LIMIT :limit) ORDER BY createdAt ASC")
+    @Query("SELECT * FROM (SELECT * FROM messages WHERE conversationId = :conversationId AND accountUserId = :accountUserId ORDER BY createdAt DESC LIMIT :limit) ORDER BY createdAt ASC")
     fun getMessagesPagedForAccount(conversationId: String, accountUserId: String, limit: Int): Flow<List<MessageEntity>>
 
     @Query("DELETE FROM messages WHERE accountUserId = :accountUserId")
@@ -47,13 +47,19 @@ interface MessageDao {
     @Query("UPDATE messages SET status = :status WHERE id = :messageId")
     suspend fun updateMessageStatus(messageId: String, status: String)
 
-    // Outbox Operations
+    // Outbox Operations (Account Isolated)
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOutboxMessage(outboxMessage: OutboxMessageEntity)
 
     @Query("SELECT * FROM outbox_messages ORDER BY createdAt ASC")
     suspend fun getAllPendingOutboxMessages(): List<OutboxMessageEntity>
 
+    @Query("SELECT * FROM outbox_messages WHERE accountUserId = :accountUserId ORDER BY createdAt ASC")
+    suspend fun getPendingOutboxMessagesForAccount(accountUserId: String): List<OutboxMessageEntity>
+
     @Query("DELETE FROM outbox_messages WHERE localId = :localId")
     suspend fun deleteOutboxMessage(localId: String)
+
+    @Query("DELETE FROM outbox_messages WHERE accountUserId = :accountUserId")
+    suspend fun deleteOutboxForAccount(accountUserId: String)
 }

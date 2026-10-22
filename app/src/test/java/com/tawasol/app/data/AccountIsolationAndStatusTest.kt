@@ -1,5 +1,6 @@
 package com.tawasol.app.data
 
+import com.tawasol.app.core.database.entity.OutboxMessageEntity
 import com.tawasol.app.core.database.entity.ConversationEntity
 import com.tawasol.app.core.database.entity.MessageEntity
 import com.tawasol.app.domain.model.UserStatus
@@ -21,7 +22,7 @@ import java.time.temporal.ChronoUnit
 
 /**
  * Unit tests validating:
- * 1. Multi-account data isolation in Room schema (accountUserId column scoping).
+ * 1. Multi-account data isolation in Room schema (accountUserId column scoping for conversations, messages, and outbox).
  * 2. Status / Stories repository business rules: 24h expiry, view tracking, and status deletion.
  */
 class AccountIsolationAndStatusTest {
@@ -30,6 +31,7 @@ class AccountIsolationAndStatusTest {
     private class FakeRoomStorage {
         val conversations = mutableListOf<ConversationEntity>()
         val messages = mutableListOf<MessageEntity>()
+        val outboxMessages = mutableListOf<OutboxMessageEntity>()
 
         fun insertConversation(entity: ConversationEntity) {
             conversations.removeAll { it.id == entity.id && it.accountUserId == entity.accountUserId }
@@ -41,6 +43,11 @@ class AccountIsolationAndStatusTest {
             messages.add(entity)
         }
 
+        fun insertOutboxMessage(entity: OutboxMessageEntity) {
+            outboxMessages.removeAll { it.localId == entity.localId && it.accountUserId == entity.accountUserId }
+            outboxMessages.add(entity)
+        }
+
         fun getConversationsForAccount(accountUserId: String): List<ConversationEntity> {
             return conversations.filter { it.accountUserId == accountUserId }
         }
@@ -49,12 +56,20 @@ class AccountIsolationAndStatusTest {
             return messages.filter { it.accountUserId == accountUserId && it.conversationId == conversationId }
         }
 
+        fun getPendingOutboxForAccount(accountUserId: String): List<OutboxMessageEntity> {
+            return outboxMessages.filter { it.accountUserId == accountUserId }
+        }
+
         fun deleteConversationsForAccount(accountUserId: String) {
             conversations.removeAll { it.accountUserId == accountUserId }
         }
 
         fun deleteMessagesForAccount(accountUserId: String) {
             messages.removeAll { it.accountUserId == accountUserId }
+        }
+
+        fun deleteOutboxForAccount(accountUserId: String) {
+            outboxMessages.removeAll { it.accountUserId == accountUserId }
         }
     }
 
@@ -252,6 +267,47 @@ class AccountIsolationAndStatusTest {
         assertTrue(roomStorage.getConversationsForAccount(userA).isEmpty())
         assertEquals(1, roomStorage.getConversationsForAccount(userB).size)
         assertEquals("convo_b", roomStorage.getConversationsForAccount(userB).first().id)
+    }
+
+    @Test
+    fun `outbox messages are isolated by accountUserId preventing cross-account sync`() {
+        val userA = "account_user_A"
+        val userB = "account_user_B"
+
+        // Insert pending offline message for User A
+        roomStorage.insertOutboxMessage(
+            OutboxMessageEntity(
+                localId = "local_outbox_1",
+                conversationId = "convo_101",
+                text = "رسالة مؤجلة من المستخدم أ",
+                messageType = "text",
+                accountUserId = userA
+            )
+        )
+
+        // User A should see their outbox message
+        val outboxA = roomStorage.getPendingOutboxForAccount(userA)
+        assertEquals(1, outboxA.size)
+        assertEquals("رسالة مؤجلة من المستخدم أ", outboxA.first().text)
+
+        // User B must NOT see or sync User A's outbox message
+        val outboxB = roomStorage.getPendingOutboxForAccount(userB)
+        assertTrue("User B must see 0 outbox messages belonging to User A", outboxB.isEmpty())
+
+        // Clearing outbox for User A leaves User B unaffected
+        roomStorage.insertOutboxMessage(
+            OutboxMessageEntity(
+                localId = "local_outbox_2",
+                conversationId = "convo_202",
+                text = "رسالة مؤجلة من المستخدم ب",
+                messageType = "text",
+                accountUserId = userB
+            )
+        )
+        roomStorage.deleteOutboxForAccount(userA)
+
+        assertTrue(roomStorage.getPendingOutboxForAccount(userA).isEmpty())
+        assertEquals(1, roomStorage.getPendingOutboxForAccount(userB).size)
     }
 
     @Test

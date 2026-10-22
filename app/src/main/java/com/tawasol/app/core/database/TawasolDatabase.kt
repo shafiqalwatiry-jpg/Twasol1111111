@@ -26,7 +26,7 @@ import com.tawasol.app.core.database.entity.UserEntity
         MessageEntity::class,
         OutboxMessageEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(DateConverters::class)
@@ -50,6 +50,14 @@ abstract class TawasolDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Safely add accountUserId to outbox_messages to prevent cross-account queue leakage
+                db.execSQL("ALTER TABLE outbox_messages ADD COLUMN accountUserId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_outbox_messages_accountUserId ON outbox_messages(accountUserId)")
+            }
+        }
+
         @Volatile
         private var INSTANCE: TawasolDatabase? = null
 
@@ -60,7 +68,7 @@ abstract class TawasolDatabase : RoomDatabase() {
                     TawasolDatabase::class.java,
                     DATABASE_NAME
                 )
-                    .addMigrations(MIGRATION_3_4)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                 INSTANCE = instance
                 instance

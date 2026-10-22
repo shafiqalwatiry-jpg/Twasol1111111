@@ -78,24 +78,44 @@ class E2EEManager(private val keystoreManager: SecureKeyStorage) {
     }
 
     /**
-     * Derives a 256-bit AES symmetric key from an ECDH shared secret between our private key
-     * and the peer's public key.
+     * Derives a 256-bit AES symmetric key from an ECDH shared secret using HKDF-SHA-256 (RFC 5869).
      */
-    private fun deriveSharedKey(myPrivateKey: PrivateKey, peerPublicKey: PublicKey): SecretKeySpec {
-        val keyAgreement = KeyAgreement.getInstance("ECDH")
-        keyAgreement.init(myPrivateKey)
-        keyAgreement.doPhase(peerPublicKey, true)
-        val sharedSecret = keyAgreement.generateSecret()
+    private fun deriveKeyHkdf(sharedSecret: ByteArray, info: ByteArray): SecretKeySpec {
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        val salt = ByteArray(32)
+        mac.init(SecretKeySpec(salt, "HmacSHA256"))
+        val prk = mac.doFinal(sharedSecret)
 
-        // Hash shared secret with SHA-256 to produce uniform 256-bit AES key
+        mac.init(SecretKeySpec(prk, "HmacSHA256"))
+        mac.update(info)
+        mac.update(1.toByte())
+        val okm = mac.doFinal()
+        val keyBytes = okm.copyOf(32)
+        return SecretKeySpec(keyBytes, "AES")
+    }
+
+    /**
+     * Backward-compatible SHA-256 derivation for v1 payloads.
+     */
+    private fun deriveKeySha256(sharedSecret: ByteArray): SecretKeySpec {
         val sha256 = MessageDigest.getInstance("SHA-256")
         val derivedKeyBytes = sha256.digest(sharedSecret)
         return SecretKeySpec(derivedKeyBytes, "AES")
     }
 
+    private fun computeEcdhSecret(myPrivateKey: PrivateKey, peerPublicKey: PublicKey): ByteArray {
+        val keyAgreement = KeyAgreement.getInstance("ECDH")
+        keyAgreement.init(myPrivateKey)
+        keyAgreement.doPhase(peerPublicKey, true)
+        return keyAgreement.generateSecret()
+    }
+
     /**
-     * Encrypts plaintext message into an E2EE payload.
-     * Output format: enc:v1:<base64_iv>:<base64_ciphertext>:<sender_public_key_base64>
+     * Encrypts plaintext message into an authenticated E2EE payload.
+     * Output format: enc:v2:<base64_iv>:<base64_ciphertext>:<sender_pub_base64>:<recipient_pub_base64>
+     *
+     * Including both public keys allows both the recipient and the sender (when reloading from server)
+     * to compute the exact same ECDH shared secret and decrypt the message without plaintext ever reaching the server.
      */
     fun encryptMessage(
         myUserId: String,
@@ -107,9 +127,10 @@ class E2EEManager(private val keystoreManager: SecureKeyStorage) {
             val peerPubKeyBytes = decodeBase64(peerPublicKeyBase64)
             val peerPublicKey = keyFactory.generatePublic(X509EncodedKeySpec(peerPubKeyBytes))
 
-            val sharedKey = deriveSharedKey(myKeyPair.private, peerPublicKey)
+            val sharedSecret = computeEcdhSecret(myKeyPair.private, peerPublicKey)
+            val sharedKey = deriveKeyHkdf(sharedSecret, "Tawasol-E2EE-v2".toByteArray(Charsets.UTF_8))
 
-            // 12-byte random IV for AES-GCM
+            // 12-byte random IV for AES-256-GCM (fresh unique nonce per message)
             val iv = ByteArray(12)
             secureRandom.nextBytes(iv)
 
@@ -121,54 +142,107 @@ class E2EEManager(private val keystoreManager: SecureKeyStorage) {
 
             val ivBase64 = encodeBase64(iv)
             val cipherBase64 = encodeBase64(cipherBytes)
-            val myPubBase64 = encodeBase64(myKeyPair.public.encoded)
+            val senderPubBase64 = encodeBase64(myKeyPair.public.encoded)
+            val recipientPubBase64 = peerPublicKeyBase64.trim()
 
-            Result.success("$PREFIX_V1$ivBase64:$cipherBase64:$myPubBase64")
+            Result.success("$PREFIX_V2$ivBase64:$cipherBase64:$senderPubBase64:$recipientPubBase64")
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
     /**
-     * Decrypts an incoming message. If the message starts with enc:v1:, decrypts it using
-     * our private key and the sender's public key. Otherwise returns the raw text (backward compatibility).
+     * Decrypts an incoming or stored message.
+     * Supports both v2 (HKDF-SHA-256 + dual-key header for sender & recipient) and
+     * v1 (SHA-256 backward compatibility).
+     *
+     * Never crashes or leaks raw ciphertext: returns safe readable fallback if corrupted.
      */
     fun decryptMessage(
         myUserId: String,
-        rawText: String?
+        rawText: String?,
+        fallbackPeerPublicKeyBase64: String? = null
     ): String {
-        if (rawText == null || !rawText.startsWith(PREFIX_V1)) {
-            return rawText ?: ""
+        if (rawText == null) return ""
+        if (!rawText.startsWith(PREFIX_V2) && !rawText.startsWith(PREFIX_V1)) {
+            return rawText
         }
 
         return try {
-            val payload = rawText.removePrefix(PREFIX_V1)
-            val parts = payload.split(":")
-            if (parts.size < 3) return rawText
-
-            val ivBase64 = parts[0]
-            val cipherBase64 = parts[1]
-            val senderPubBase64 = parts[2]
-
             val myKeyPair = getOrCreateUserKeyPair(myUserId)
-            val senderPubKeyBytes = decodeBase64(senderPubBase64)
-            val senderPublicKey = keyFactory.generatePublic(X509EncodedKeySpec(senderPubKeyBytes))
+            val myPubBase64 = encodeBase64(myKeyPair.public.encoded)
 
-            val sharedKey = deriveSharedKey(myKeyPair.private, senderPublicKey)
+            if (rawText.startsWith(PREFIX_V2)) {
+                val payload = rawText.removePrefix(PREFIX_V2)
+                val parts = payload.split(":")
+                if (parts.size < 4) return "🔒 [رسالة مشفرة غير صالحة]"
 
-            val iv = decodeBase64(ivBase64)
-            val cipherBytes = decodeBase64(cipherBase64)
+                val ivBase64 = parts[0]
+                val cipherBase64 = parts[1]
+                val senderPubBase64 = parts[2]
+                val recipientPubBase64 = parts[3]
 
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            val gcmSpec = GCMParameterSpec(128, iv)
-            cipher.init(Cipher.DECRYPT_MODE, sharedKey, gcmSpec)
+                // Determine peer's public key based on whether we are sender or recipient
+                val peerPubBase64 = if (myPubBase64 == senderPubBase64) {
+                    recipientPubBase64
+                } else {
+                    senderPubBase64
+                }
 
-            val decryptedBytes = cipher.doFinal(cipherBytes)
-            String(decryptedBytes, Charsets.UTF_8)
+                val peerPubKeyBytes = decodeBase64(peerPubBase64)
+                val peerPublicKey = keyFactory.generatePublic(X509EncodedKeySpec(peerPubKeyBytes))
+
+                val sharedSecret = computeEcdhSecret(myKeyPair.private, peerPublicKey)
+                val sharedKey = deriveKeyHkdf(sharedSecret, "Tawasol-E2EE-v2".toByteArray(Charsets.UTF_8))
+
+                val iv = decodeBase64(ivBase64)
+                val cipherBytes = decodeBase64(cipherBase64)
+
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                val gcmSpec = GCMParameterSpec(128, iv)
+                cipher.init(Cipher.DECRYPT_MODE, sharedKey, gcmSpec)
+
+                val decryptedBytes = cipher.doFinal(cipherBytes)
+                String(decryptedBytes, Charsets.UTF_8)
+            } else {
+                // v1 backward compatibility
+                val payload = rawText.removePrefix(PREFIX_V1)
+                val parts = payload.split(":")
+                if (parts.size < 3) return "🔒 [رسالة مشفرة غير صالحة]"
+
+                val ivBase64 = parts[0]
+                val cipherBase64 = parts[1]
+                val senderPubBase64 = parts[2]
+
+                val peerPubBase64 = if (myPubBase64 == senderPubBase64) {
+                    fallbackPeerPublicKeyBase64 ?: return "🔒 [رسالة مشفرة غير قابلة للقراءة]"
+                } else {
+                    senderPubBase64
+                }
+
+                val peerPubKeyBytes = decodeBase64(peerPubBase64)
+                val peerPublicKey = keyFactory.generatePublic(X509EncodedKeySpec(peerPubKeyBytes))
+
+                val sharedSecret = computeEcdhSecret(myKeyPair.private, peerPublicKey)
+                val sharedKey = deriveKeySha256(sharedSecret)
+
+                val iv = decodeBase64(ivBase64)
+                val cipherBytes = decodeBase64(cipherBase64)
+
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                val gcmSpec = GCMParameterSpec(128, iv)
+                cipher.init(Cipher.DECRYPT_MODE, sharedKey, gcmSpec)
+
+                val decryptedBytes = cipher.doFinal(cipherBytes)
+                String(decryptedBytes, Charsets.UTF_8)
+            }
         } catch (_: Exception) {
-            // In case decryption fails, return a safe indicator
             "🔒 [رسالة مشفرة غير قابلة للقراءة]"
         }
+    }
+
+    fun isEncrypted(rawText: String?): Boolean {
+        return rawText?.startsWith(PREFIX_V2) == true || rawText?.startsWith(PREFIX_V1) == true
     }
 
     /**
@@ -210,5 +284,6 @@ class E2EEManager(private val keystoreManager: SecureKeyStorage) {
 
     companion object {
         const val PREFIX_V1 = "enc:v1:"
+        const val PREFIX_V2 = "enc:v2:"
     }
 }

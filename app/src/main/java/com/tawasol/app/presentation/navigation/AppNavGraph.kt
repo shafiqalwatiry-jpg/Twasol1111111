@@ -141,7 +141,8 @@ fun AppNavGraph(
                     authRepository = appContainer.authRepository,
                     chatRepository = appContainer.chatRepository,
                     ensureE2EESetupUseCase = appContainer.ensureE2EESetupUseCase,
-                    statusRepository = appContainer.statusRepository
+                    statusRepository = appContainer.statusRepository,
+                    callRepository = appContainer.callRepository
                 )
             }
             HomeScreen(
@@ -227,7 +228,8 @@ fun AppNavGraph(
                     userId = userId,
                     userRepository = appContainer.userRepository,
                     authRepository = appContainer.authRepository,
-                    getOrCreateConversationUseCase = appContainer.getOrCreateConversationUseCase
+                    getOrCreateConversationUseCase = appContainer.getOrCreateConversationUseCase,
+                    friendshipRepository = appContainer.friendshipRepository
                 )
             }
             UserProfileScreen(
@@ -335,7 +337,8 @@ fun AppNavGraph(
                     sendMessageUseCase = appContainer.sendMessageUseCase,
                     markConversationAsReadUseCase = appContainer.markConversationAsReadUseCase,
                     authRepository = appContainer.authRepository,
-                    sendMediaMessageUseCase = appContainer.sendMediaMessageUseCase
+                    sendMediaMessageUseCase = appContainer.sendMediaMessageUseCase,
+                    callRepository = appContainer.callRepository
                 )
             }
             com.tawasol.app.presentation.chat.ChatScreen(
