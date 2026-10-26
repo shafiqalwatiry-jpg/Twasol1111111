@@ -16,9 +16,10 @@ import javax.net.ssl.SSLException
 object NetworkErrorMapper {
 
     private const val DEFAULT_NETWORK_ERROR = "لا يوجد اتصال بالإنترنت. تحقق من اتصالك وحاول مرة أخرى"
-    private const val TIMEOUT_ERROR = "انتهت مهلة الاتصال بالخادم. تحقق من سرعة اتصالك وحاول مرة أخرى"
+    private const val CONNECT_ERROR = "تعذر الاتصال بالخادم. تحقق من اتصالك بالإنترنت وحاول مجدداً"
+    private const val TIMEOUT_ERROR = "انتهت مهلة الاتصال بالخادم. حاول مجدداً"
     private const val SERVER_UNAVAILABLE_ERROR = "خادم تواصل غير متاح حالياً. يرجى المحاولة بعد قليل"
-    private const val INVALID_CREDENTIALS_ERROR = "اسم المستخدم أو كلمة المرور غير صحيحة"
+    private const val INVALID_CREDENTIALS_ERROR = "بيانات الدخول غير صحيحة. تحقق من اسم المستخدم أو كلمة المرور"
     private const val UNEXPECTED_ERROR = "حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى"
 
     fun toUserMessage(throwable: Throwable?): String {
@@ -44,25 +45,30 @@ object NetworkErrorMapper {
             return TIMEOUT_ERROR
         }
 
-        // 3. Check for DNS resolution or connection failures (including IP/port connection errors)
+        // 3. Check for server connection refused / unreachable server port
+        if (throwable is ConnectException ||
+            cause is ConnectException ||
+            message.contains("Connection refused", ignoreCase = true) ||
+            message.contains("ConnectException", ignoreCase = true)
+        ) {
+            return CONNECT_ERROR
+        }
+
+        // 4. Check for DNS resolution or general network offline failures
         if (throwable is UnknownHostException ||
             cause is UnknownHostException ||
-            throwable is ConnectException ||
-            cause is ConnectException ||
             throwable is NoRouteToHostException ||
             throwable is PortUnreachableException ||
             throwable is SSLException ||
             message.contains("Failed to connect", ignoreCase = true) ||
             message.contains("Unable to resolve host", ignoreCase = true) ||
             message.contains("Network is unreachable", ignoreCase = true) ||
-            message.contains("Connection refused", ignoreCase = true) ||
-            message.contains("ConnectException", ignoreCase = true) ||
             message.contains("UnresolvedAddressException", ignoreCase = true)
         ) {
             return DEFAULT_NETWORK_ERROR
         }
 
-        // 4. Server-side HTTP errors
+        // 5. Server-side HTTP errors
         if (message.contains("500") ||
             message.contains("502") ||
             message.contains("503") ||
@@ -73,18 +79,18 @@ object NetworkErrorMapper {
             return SERVER_UNAVAILABLE_ERROR
         }
 
-        // 5. Clean custom domain exceptions that don't leak technical details
+        // 6. Clean custom domain exceptions that don't leak technical details
         if (throwable is IllegalArgumentException || throwable is IllegalStateException) {
             val rawMsg = throwable.localizedMessage ?: throwable.message ?: ""
             // Strip any IP addresses or raw domain URLs from user message
-            val sanitized = sanitizeTechnicalDetails(rawMsg)
+            val sanitized = sanitize(rawMsg)
             if (sanitized.isNotBlank() && !sanitized.contains("Exception")) {
                 return sanitized
             }
         }
 
-        // 6. Generic safe fallback
-        val sanitizedMsg = sanitizeTechnicalDetails(message)
+        // 7. Generic safe fallback
+        val sanitizedMsg = sanitize(message)
         return if (sanitizedMsg.isNotBlank() && !sanitizedMsg.contains("Exception") && !sanitizedMsg.contains("supabase.co")) {
             sanitizedMsg
         } else {
@@ -93,18 +99,21 @@ object NetworkErrorMapper {
     }
 
     /**
-     * Removes IP addresses, ports, and internal domain names from error strings
+     * Removes IP addresses, ports, URLs, and internal domain names from error strings
      * to prevent technical leakage in the UI.
      */
-    private fun sanitizeTechnicalDetails(raw: String): String {
+    fun sanitize(raw: String): String {
         return raw
-            // Remove IP:Port patterns (e.g. 104.18.38.10:443)
+            // Remove IP:Port patterns (e.g. 104.18.38.10:443 or 192.168.1.1)
             .replace(Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?\b"""), "")
-            // Remove supabase.co URLs
-            .replace(Regex("""https?://[a-zA-Z0-9.-]+\.supabase\.co(/.*)?"""), "")
+            // Remove URLs
+            .replace(Regex("""https?://[^\s/$.?#].[^\s]*"""), "")
+            // Remove supabase.co domains
             .replace(Regex("""[a-zA-Z0-9.-]+\.supabase\.co(:\d+)?"""), "")
             // Remove generic Exception class names
             .replace(Regex("""[a-zA-Z0-9_.]+(Exception|Error):?"""), "")
             .trim()
     }
+
+    fun sanitizeTechnicalDetails(raw: String): String = sanitize(raw)
 }
