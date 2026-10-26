@@ -241,9 +241,7 @@ class E2EEManager(private val keystoreManager: SecureKeyStorage) {
         }
     }
 
-    fun isEncrypted(rawText: String?): Boolean {
-        return rawText?.startsWith(PREFIX_V2) == true || rawText?.startsWith(PREFIX_V1) == true
-    }
+    fun isEncrypted(rawText: String?): Boolean = Companion.isEncrypted(rawText)
 
     /**
      * Generates a standard 60-digit Safety Number (رقم الأمان) between two users.
@@ -285,5 +283,9 @@ class E2EEManager(private val keystoreManager: SecureKeyStorage) {
     companion object {
         const val PREFIX_V1 = "enc:v1:"
         const val PREFIX_V2 = "enc:v2:"
+
+        fun isEncrypted(rawText: String?): Boolean {
+            return rawText?.startsWith(PREFIX_V2) == true || rawText?.startsWith(PREFIX_V1) == true
+        }
     }
 }

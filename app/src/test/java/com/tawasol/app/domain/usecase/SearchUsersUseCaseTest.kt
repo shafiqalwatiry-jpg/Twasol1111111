@@ -39,6 +39,7 @@ class FakeUserRepository : UserRepository {
 
     override fun getPrivacySettings(userId: String): Flow<PrivacySettings?> = flowOf(PrivacySettings(userId = userId))
     override suspend fun updatePrivacySettings(settings: PrivacySettings): Result<Unit> = Result.success(Unit)
+    override suspend fun updatePresence(isOnline: Boolean): Result<Unit> = Result.success(Unit)
 }
 
 class SearchUsersUseCaseTest {
