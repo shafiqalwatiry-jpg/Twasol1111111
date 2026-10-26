@@ -126,11 +126,15 @@ class UserProfileViewModel(
         val targetId = if (userId == "self") authRepository.currentUserId ?: "" else userId
         if (targetId.isEmpty() || friendshipRepository == null) return
 
-        _uiState.update { it.copy(isActionLoading = true) }
+        _uiState.update { it.copy(isActionLoading = true, errorMessage = null) }
         viewModelScope.launch {
-            // Find incoming request ID
-            val res = friendshipRepository.sendFriendRequest(targetId) // or accept directly
-            _uiState.update { it.copy(isActionLoading = false, friendshipStatus = FriendshipStatus.FRIENDS) }
+            val res = friendshipRepository.acceptFriendRequestFromUser(targetId)
+            _uiState.update { it.copy(isActionLoading = false) }
+            res.onSuccess {
+                _uiState.update { it.copy(friendshipStatus = FriendshipStatus.FRIENDS) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(errorMessage = err.localizedMessage) }
+            }
         }
     }
 

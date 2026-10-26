@@ -5,6 +5,7 @@ import com.tawasol.app.core.database.entity.UserEntity
 import com.tawasol.app.core.security.KeystoreManager
 import com.tawasol.app.core.supabase.SupabaseClientProvider
 import com.tawasol.app.core.supabase.SupabaseConfig
+import com.tawasol.app.core.network.NetworkErrorMapper
 import com.tawasol.app.domain.model.User
 import com.tawasol.app.domain.repository.AuthRepository
 import io.github.jan.supabase.auth.providers.builtin.Email
@@ -136,14 +137,7 @@ class AuthRepositoryImpl(
 
                 Result.success(user)
             } catch (e: Exception) {
-                val errorMsg = when {
-                    e.message?.contains("Invalid login credentials", ignoreCase = true) == true ->
-                        "اسم المستخدم أو كلمة المرور غير صحيحة"
-                    e.message?.contains("Network", ignoreCase = true) == true ||
-                    e.message?.contains("ConnectException", ignoreCase = true) == true ->
-                        "تعذر الاتصال بالخادم، يرجى التحقق من اتصال الإنترنت"
-                    else -> "فشل تسجيل الدخول: ${e.localizedMessage ?: "حدث خطأ غير متوقع"}"
-                }
+                val errorMsg = NetworkErrorMapper.toUserMessage(e)
                 Result.failure(Exception(errorMsg))
             }
         }
@@ -247,12 +241,10 @@ class AuthRepositoryImpl(
 
             Result.success(domainUser)
         } catch (e: Exception) {
-            val errorMsg = when {
-                e.message?.contains("User already registered", ignoreCase = true) == true ->
-                    "يوجد حساب مسجل بالفعل بهذه البيانات"
-                e.message?.contains("Network", ignoreCase = true) == true ->
-                    "تعذر الاتصال بالخادم، يرجى التحقق من اتصالك بالإنترنت"
-                else -> "تعذر إكمال التسجيل: ${e.localizedMessage ?: "حدث خطأ غير متوقع"}"
+            val errorMsg = if (e.message?.contains("User already registered", ignoreCase = true) == true) {
+                "يوجد حساب مسجل بالفعل بهذه البيانات"
+            } else {
+                NetworkErrorMapper.toUserMessage(e)
             }
             Result.failure(Exception(errorMsg))
         }

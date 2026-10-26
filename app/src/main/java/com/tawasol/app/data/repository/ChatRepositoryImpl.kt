@@ -4,6 +4,7 @@ import com.tawasol.app.core.database.TawasolDatabase
 import com.tawasol.app.core.database.entity.ConversationEntity
 import com.tawasol.app.core.database.entity.MessageEntity
 import com.tawasol.app.core.database.entity.OutboxMessageEntity
+import com.tawasol.app.core.network.NetworkErrorMapper
 import com.tawasol.app.core.network.NetworkMonitor
 import com.tawasol.app.core.security.E2EEManager
 import com.tawasol.app.core.security.KeystoreManager
@@ -195,8 +196,8 @@ class ChatRepositoryImpl(
             return@withContext Result.failure(Exception("لا يمكن بدء محادثة مع نفسك"))
         }
 
-        // 1. Check local database first
-        val localConvo = database.conversationDao().getConversationByPeerUserId(otherUserId)
+        // 1. Check local database first with strict account isolation
+        val localConvo = database.conversationDao().getConversationByPeerUserIdAndAccount(otherUserId, currentUserId)
         if (localConvo != null) {
             return@withContext Result.success(localConvo.id)
         }
@@ -229,7 +230,11 @@ class ChatRepositoryImpl(
             getOrFetchPeerPublicKey(otherUserId)
         }
 
-        // 3. Call atomic RPC on Supabase
+        // 3. Deterministic direct conversation ID (commutative for both A->B and B->A)
+        val sortedUids = listOf(currentUserId, otherUserId).sorted()
+        val deterministicDirectId = UUID.nameUUIDFromBytes("tawasol_direct_${sortedUids[0]}_${sortedUids[1]}".toByteArray()).toString()
+
+        // 4. Call atomic RPC on Supabase (authoritative source of truth)
         try {
             val response = supabaseProvider.postgrest.rpc(
                 "get_or_create_direct_conversation",
@@ -238,7 +243,7 @@ class ChatRepositoryImpl(
                 }
             ).decodeSingleOrNull<String>()
 
-            val convoId = response ?: UUID.randomUUID().toString()
+            val convoId = response ?: deterministicDirectId
 
             // Save in Room
             val entity = ConversationEntity(
@@ -258,10 +263,9 @@ class ChatRepositoryImpl(
 
             Result.success(convoId)
         } catch (e: Exception) {
-            // Offline fallback: generate local conversation ID
-            val fallbackId = UUID.randomUUID().toString()
+            // Offline fallback: use deterministic ID so both peers use the exact same conversation ID
             val entity = ConversationEntity(
-                id = fallbackId,
+                id = deterministicDirectId,
                 type = "direct",
                 title = peerName,
                 avatarUrl = peerAvatar,
@@ -272,7 +276,7 @@ class ChatRepositoryImpl(
                 updatedAt = Instant.now()
             )
             database.conversationDao().insertConversation(entity)
-            Result.success(fallbackId)
+            Result.success(deterministicDirectId)
         }
     }
 
@@ -400,7 +404,7 @@ class ChatRepositoryImpl(
                 )
             )
             database.messageDao().updateMessageStatus(localId, "failed")
-            Result.failure(Exception("تعذر إرسال الرسالة: ${e.localizedMessage ?: "تحقق من الاتصال"}"))
+            Result.failure(Exception("تعذر إرسال الرسالة: ${NetworkErrorMapper.toUserMessage(e)}"))
         }
     }
 
@@ -581,7 +585,7 @@ class ChatRepositoryImpl(
                 )
             )
             database.messageDao().updateMessageStatus(localId, "sending")
-            Result.failure(Exception("تعذر إرسال الملف حالياً عبر الشبكة، تم حفظه محلياً وسيتم إرساله تلقائياً: ${e.localizedMessage ?: "تحقق من الاتصال"}"))
+            Result.failure(Exception("تعذر إرسال الملف حالياً عبر الشبكة، تم حفظه محلياً وسيتم إرساله تلقائياً: ${NetworkErrorMapper.toUserMessage(e)}"))
         }
     }
 
@@ -632,7 +636,7 @@ class ChatRepositoryImpl(
 
             val entities = remoteMessages.map { dto ->
                 val rawText = dto.text
-                val decryptedText = if (currentUserId != null && rawText?.startsWith(E2EEManager.PREFIX_V1) == true) {
+                val decryptedText = if (currentUserId != null && e2eeManager.isEncrypted(rawText)) {
                     e2eeManager.decryptMessage(currentUserId, rawText)
                 } else {
                     rawText
@@ -645,6 +649,7 @@ class ChatRepositoryImpl(
                     text = decryptedText,
                     messageType = dto.message_type,
                     status = "sent",
+                    mediaUrl = dto.media_url,
                     replyToMessageId = dto.reply_to_message_id,
                     accountUserId = currentUserId ?: "",
                     createdAt = parseInstantOrNow(dto.created_at)
@@ -679,7 +684,7 @@ class ChatRepositoryImpl(
 
                             // Decrypt E2EE message if applicable
                             val rawText = dto.text
-                            val decryptedText = if (currentUserId != null && rawText?.startsWith(E2EEManager.PREFIX_V1) == true) {
+                            val decryptedText = if (currentUserId != null && e2eeManager.isEncrypted(rawText)) {
                                 e2eeManager.decryptMessage(currentUserId, rawText)
                             } else {
                                 rawText
@@ -693,22 +698,52 @@ class ChatRepositoryImpl(
                                 text = decryptedText,
                                 messageType = dto.message_type,
                                 status = "sent",
+                                mediaUrl = dto.media_url,
                                 replyToMessageId = dto.reply_to_message_id,
                                 accountUserId = currentUserId ?: "",
                                 createdAt = now
                             )
                             database.messageDao().insertMessage(entity)
 
-                            // Update conversation preview
-                            database.conversationDao().updateLastMessage(
-                                conversationId = dto.conversation_id,
-                                text = decryptedText,
-                                timestamp = now
-                            )
+                            // Ensure conversation exists locally in Room; create if newly started by peer
+                            val existingConvo = if (!currentUserId.isNullOrBlank()) {
+                                database.conversationDao().getConversationByIdAndAccount(dto.conversation_id, currentUserId)
+                            } else {
+                                database.conversationDao().getConversationById(dto.conversation_id)
+                            }
 
-                            // If message is from other user, increment unread count
-                            if (dto.sender_id != currentUserId) {
-                                database.conversationDao().incrementUnreadCount(dto.conversation_id)
+                            if (existingConvo == null) {
+                                val senderProfile = try {
+                                    supabaseProvider.postgrest.from(SupabaseConfig.PROFILES_TABLE)
+                                        .select { filter { eq("id", dto.sender_id) } }
+                                        .decodeSingleOrNull<ProfileDto>()
+                                } catch (e: Exception) { null }
+
+                                database.conversationDao().insertConversation(
+                                    ConversationEntity(
+                                        id = dto.conversation_id,
+                                        type = "direct",
+                                        title = senderProfile?.display_name ?: "محادثة",
+                                        avatarUrl = senderProfile?.avatar_url,
+                                        peerUserId = dto.sender_id,
+                                        peerUsername = senderProfile?.username,
+                                        lastMessageText = decryptedText,
+                                        lastMessageTimestamp = now,
+                                        unreadCount = if (dto.sender_id != currentUserId) 1 else 0,
+                                        accountUserId = currentUserId ?: "",
+                                        createdAt = now,
+                                        updatedAt = now
+                                    )
+                                )
+                            } else {
+                                database.conversationDao().updateLastMessage(
+                                    conversationId = dto.conversation_id,
+                                    text = decryptedText,
+                                    timestamp = now
+                                )
+                                if (dto.sender_id != currentUserId) {
+                                    database.conversationDao().incrementUnreadCount(dto.conversation_id)
+                                }
                             }
 
                             val domainMessage = Message(
@@ -718,6 +753,7 @@ class ChatRepositoryImpl(
                                 text = decryptedText,
                                 type = try { MessageType.valueOf(dto.message_type.uppercase()) } catch (e: Exception) { MessageType.TEXT },
                                 status = MessageStatus.SENT,
+                                mediaUrl = dto.media_url,
                                 replyToMessageId = dto.reply_to_message_id,
                                 createdAt = now
                             )
@@ -800,7 +836,7 @@ class ChatRepositoryImpl(
                 val peerUsername = peerProfile?.username
 
                 val rawLastMsg = convo.last_message_text
-                val decryptedLastMsg = if (rawLastMsg?.startsWith(E2EEManager.PREFIX_V1) == true) {
+                val decryptedLastMsg = if (rawLastMsg != null && e2eeManager.isEncrypted(rawLastMsg)) {
                     e2eeManager.decryptMessage(currentUserId, rawLastMsg)
                 } else {
                     rawLastMsg
@@ -833,7 +869,7 @@ class ChatRepositoryImpl(
                     if (messages.isNotEmpty()) {
                         val messageEntities = messages.map { dto ->
                             val rawText = dto.text
-                            val decryptedText = if (rawText?.startsWith(E2EEManager.PREFIX_V1) == true) {
+                            val decryptedText = if (rawText != null && e2eeManager.isEncrypted(rawText)) {
                                 e2eeManager.decryptMessage(currentUserId, rawText)
                             } else {
                                 rawText
@@ -845,6 +881,7 @@ class ChatRepositoryImpl(
                                 text = decryptedText,
                                 messageType = dto.message_type,
                                 status = "sent",
+                                mediaUrl = dto.media_url,
                                 replyToMessageId = dto.reply_to_message_id,
                                 accountUserId = currentUserId,
                                 createdAt = parseInstantOrNow(dto.created_at)

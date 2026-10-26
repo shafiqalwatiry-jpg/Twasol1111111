@@ -337,4 +337,31 @@ class UserRepositoryImpl(
             Result.failure(Exception("تعذر حفظ إعدادات الخصوصية في الخادم: ${e.localizedMessage ?: "حدث خطأ"}"))
         }
     }
+
+    override suspend fun updatePresence(isOnline: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+        val currentUserId = keystoreManager.getCurrentUserId()
+            ?: return@withContext Result.failure(IllegalStateException("المستخدم غير مسجل"))
+
+        val now = Instant.now()
+        // Update local Room cache first
+        try {
+            database.userDao().updateUserStatus(currentUserId, isOnline, now)
+        } catch (_: Exception) {}
+
+        try {
+            val payload = buildJsonObject {
+                put("is_online", isOnline)
+                put("last_seen", now.toString())
+            }
+            supabaseProvider.postgrest.from(SupabaseConfig.PROFILES_TABLE)
+                .update(payload) {
+                    filter { eq("id", currentUserId) }
+                }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            // Non-fatal if offline
+            Result.success(Unit)
+        }
+    }
 }
+

@@ -1,10 +1,14 @@
 package com.tawasol.app.presentation.chat
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import com.tawasol.app.core.media.AudioRecorder
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -91,6 +95,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -157,7 +162,8 @@ data class ChatUiState(
     val activeCall: com.tawasol.app.domain.model.CallSession? = null,
     val isMicMuted: Boolean = false,
     val isSpeakerOn: Boolean = false,
-    val isCameraOff: Boolean = false
+    val isCameraOff: Boolean = false,
+    val peerUser: com.tawasol.app.domain.model.User? = null
 )
 
 class ChatViewModel(
@@ -169,7 +175,8 @@ class ChatViewModel(
     private val markConversationAsReadUseCase: MarkConversationAsReadUseCase,
     private val authRepository: AuthRepository,
     private val sendMediaMessageUseCase: SendMediaMessageUseCase? = null,
-    private val callRepository: com.tawasol.app.domain.repository.CallRepository? = null
+    private val callRepository: com.tawasol.app.domain.repository.CallRepository? = null,
+    private val userRepository: com.tawasol.app.domain.repository.UserRepository? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -188,13 +195,34 @@ class ChatViewModel(
         loadConversation()
         listenToRealtimeMessages()
         markAsRead()
+        markPresenceOnline()
+    }
+
+    private fun markPresenceOnline() {
+        viewModelScope.launch {
+            userRepository?.updatePresence(true)
+        }
     }
 
     private fun loadConversation() {
         viewModelScope.launch {
             getConversationUseCase(conversationId).collect { convo ->
                 _uiState.update { it.copy(conversation = convo) }
+                convo?.peerUserId?.let { peerId ->
+                    observePeerUser(peerId)
+                }
             }
+        }
+    }
+
+    private fun observePeerUser(peerId: String) {
+        viewModelScope.launch {
+            userRepository?.getUser(peerId)?.collect { user ->
+                _uiState.update { it.copy(peerUser = user) }
+            }
+        }
+        viewModelScope.launch {
+            userRepository?.getUserProfile(peerId)
         }
     }
 
@@ -330,19 +358,21 @@ class ChatViewModel(
         _uiState.update { it.copy(isRecordingVoice = false, recordingDurationSeconds = 0) }
     }
 
-    fun stopAndSendVoiceRecording() {
-        val duration = _uiState.value.recordingDurationSeconds
-        val effectiveDuration = if (duration <= 0) 1 else duration
-        _uiState.update { it.copy(isRecordingVoice = false, recordingDurationSeconds = 0, isSending = true) }
+    fun sendVoiceNote(audioBytes: ByteArray, durationSeconds: Int) {
+        if (audioBytes.isEmpty() || audioBytes.size < 500) {
+            _uiState.update { it.copy(isRecordingVoice = false, recordingDurationSeconds = 0, errorMessage = "التسجيل الصوتي فارغ أو قصير جداً") }
+            return
+        }
+        val effectiveDuration = if (durationSeconds <= 0) 1 else durationSeconds
+        _uiState.update { it.copy(isRecordingVoice = false, recordingDurationSeconds = 0, isSending = true, errorMessage = null) }
 
         viewModelScope.launch {
-            val audioBytes = ByteArray(1024) { 0x55.toByte() }
             val replyToId = _uiState.value.replyingToMessage?.id
             val result = chatRepository.sendMediaMessage(
                 conversationId = conversationId,
                 fileBytes = audioBytes,
-                fileName = "voice_note_${System.currentTimeMillis()}.m4a",
-                mimeType = "audio/m4a",
+                fileName = "voice_${System.currentTimeMillis()}.m4a",
+                mimeType = "audio/mp4",
                 messageType = MessageType.AUDIO,
                 caption = null,
                 replyToId = replyToId,
@@ -359,6 +389,10 @@ class ChatViewModel(
                 }
             }
         }
+    }
+
+    fun stopAndSendVoiceRecording() {
+        cancelVoiceRecording()
     }
 
     fun sendRealMedia(
@@ -523,7 +557,31 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     var showMenu by remember { mutableStateOf(false) }
     var showEmojiSheet by remember { mutableStateOf(false) }
+    var previewImageUrl by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    val audioRecorder = remember { AudioRecorder(context) }
+    DisposableEffect(Unit) {
+        onDispose {
+            audioRecorder.cancelRecording()
+        }
+    }
+
+    val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            audioRecorder.startRecording().onSuccess {
+                viewModel.startVoiceRecording()
+            }.onFailure { err ->
+                scope.launch { snackbarHostState.showSnackbar(err.localizedMessage ?: "تعذر بدء التسجيل") }
+            }
+        } else {
+            scope.launch {
+                snackbarHostState.showSnackbar("يلزم منح إذن الميكروفون لتسجيل الرسائل الصوتية")
+            }
+        }
+    }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -759,6 +817,14 @@ fun ChatScreen(
             TopAppBar(
                 title = {
                     val convo = state.conversation
+                    val peer = state.peerUser
+                    val isPeerOnline = peer?.isOnline == true
+                    val presenceText = when {
+                        isPeerOnline -> "متصل الآن • مشفر E2EE"
+                        peer?.lastSeen != null -> "آخر ظهور ${formatTime(peer.lastSeen)} • مشفر E2EE"
+                        else -> "غير متصل • مشفر E2EE"
+                    }
+
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -772,7 +838,7 @@ fun ChatScreen(
                             name = convo?.title ?: "محادثة",
                             avatarUrl = convo?.avatarUrl,
                             size = 40,
-                            isOnline = true
+                            isOnline = isPeerOnline
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
@@ -794,9 +860,9 @@ fun ChatScreen(
                                 )
                             }
                             Text(
-                                text = "متصل الآن • مشفر E2EE",
+                                text = presenceText,
                                 style = MaterialTheme.typography.bodySmall.copy(
-                                    color = TealPrimary,
+                                    color = if (isPeerOnline) TealPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                     fontSize = 11.sp
                                 ),
                                 maxLines = 1
@@ -988,8 +1054,23 @@ fun ChatScreen(
                         // Voice Recording State UI
                         VoiceRecordingBar(
                             durationSeconds = state.recordingDurationSeconds,
-                            onCancel = { viewModel.cancelVoiceRecording() },
-                            onSend = { viewModel.stopAndSendVoiceRecording() }
+                            onCancel = {
+                                audioRecorder.cancelRecording()
+                                viewModel.cancelVoiceRecording()
+                            },
+                            onSend = {
+                                val res = audioRecorder.stopRecording()
+                                res.onSuccess { (file, duration) ->
+                                    val bytes = file.readBytes()
+                                    file.delete()
+                                    viewModel.sendVoiceNote(bytes, duration)
+                                }.onFailure { err ->
+                                    viewModel.cancelVoiceRecording()
+                                    scope.launch {
+                                        snackbarHostState.showSnackbar(err.localizedMessage ?: "تعذر حفظ التسجيل الصوتي")
+                                    }
+                                }
+                            }
                         )
                     } else {
                         // Standard Composer Row
@@ -1077,7 +1158,22 @@ fun ChatScreen(
                                         if (hasText) {
                                             viewModel.sendMessage()
                                         } else {
-                                            viewModel.startVoiceRecording()
+                                            val hasPermission = ContextCompat.checkSelfPermission(
+                                                context,
+                                                Manifest.permission.RECORD_AUDIO
+                                            ) == PackageManager.PERMISSION_GRANTED
+
+                                            if (hasPermission) {
+                                                audioRecorder.startRecording().onSuccess {
+                                                    viewModel.startVoiceRecording()
+                                                }.onFailure { err ->
+                                                    scope.launch {
+                                                        snackbarHostState.showSnackbar(err.localizedMessage ?: "تعذر بدء التسجيل")
+                                                    }
+                                                }
+                                            } else {
+                                                recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                            }
                                         }
                                     },
                                 contentAlignment = Alignment.Center
@@ -1178,9 +1274,48 @@ fun ChatScreen(
                             },
                             onToggleSpeed = { viewModel.toggleAudioSpeed() },
                             onReply = { viewModel.setReplyingToMessage(message) },
-                            onRetry = { viewModel.retrySendMessage(message) }
+                            onRetry = { viewModel.retrySendMessage(message) },
+                            onImageClick = { url -> previewImageUrl = url }
                         )
                     }
+                }
+            }
+        }
+    }
+
+    if (previewImageUrl != null) {
+        Dialog(
+            onDismissRequest = { previewImageUrl = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.95f))
+                    .clickable { previewImageUrl = null },
+                contentAlignment = Alignment.Center
+            ) {
+                AsyncImage(
+                    model = previewImageUrl,
+                    contentDescription = "عرض الصورة بالحجم الكامل",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    contentScale = ContentScale.Fit
+                )
+                IconButton(
+                    onClick = { previewImageUrl = null },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 40.dp, end = 20.dp)
+                        .size(44.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "إغلاق",
+                        tint = Color.White
+                    )
                 }
             }
         }
@@ -1197,7 +1332,8 @@ fun MessageBubble(
     onPlayAudio: () -> Unit,
     onToggleSpeed: () -> Unit,
     onReply: () -> Unit,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    onImageClick: (String) -> Unit = {}
 ) {
     // WhatsApp color palette:
     // Self: Dark `#005C4B` or Light `#DCF8C6`
@@ -1309,7 +1445,8 @@ fun MessageBubble(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(200.dp)
-                                        .clip(RoundedCornerShape(12.dp)),
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable { onImageClick(imageSource) },
                                     contentScale = ContentScale.Crop
                                 )
                             } else {

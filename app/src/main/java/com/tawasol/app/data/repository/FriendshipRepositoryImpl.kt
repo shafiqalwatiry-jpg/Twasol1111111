@@ -89,6 +89,29 @@ class FriendshipRepositoryImpl(
             }
         }
 
+    override suspend fun acceptFriendRequestFromUser(senderUserId: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            val currentUserId = currentUserIdProvider()
+                ?: return@withContext Result.failure(IllegalStateException("يجب تسجيل الدخول"))
+
+            try {
+                supabaseProvider.postgrest.from("friend_requests")
+                    .update({
+                        set("status", "accepted")
+                        set("updated_at", Instant.now().toString())
+                    }) {
+                        filter {
+                            eq("sender_id", senderUserId)
+                            eq("receiver_id", currentUserId)
+                            eq("status", "pending")
+                        }
+                    }
+                Result.success(Unit)
+            } catch (e: Exception) {
+                Result.failure(Exception("تعذر قبول طلب الصداقة: ${e.localizedMessage}"))
+            }
+        }
+
     override suspend fun rejectFriendRequest(requestId: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             val currentUserId = currentUserIdProvider()

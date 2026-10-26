@@ -338,7 +338,8 @@ fun AppNavGraph(
                     markConversationAsReadUseCase = appContainer.markConversationAsReadUseCase,
                     authRepository = appContainer.authRepository,
                     sendMediaMessageUseCase = appContainer.sendMediaMessageUseCase,
-                    callRepository = appContainer.callRepository
+                    callRepository = appContainer.callRepository,
+                    userRepository = appContainer.userRepository
                 )
             }
             com.tawasol.app.presentation.chat.ChatScreen(

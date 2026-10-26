@@ -36,6 +36,7 @@ interface UserRepository {
     suspend fun uploadAvatar(userId: String, imageBytes: ByteArray, mimeType: String): Result<String>
     fun getPrivacySettings(userId: String): Flow<PrivacySettings?>
     suspend fun updatePrivacySettings(settings: PrivacySettings): Result<Unit>
+    suspend fun updatePresence(isOnline: Boolean): Result<Unit>
 }
 
 interface ChatRepository {
@@ -86,6 +87,7 @@ interface StatusRepository {
 interface FriendshipRepository {
     suspend fun sendFriendRequest(targetUserId: String): Result<FriendRequest>
     suspend fun acceptFriendRequest(requestId: String): Result<Unit>
+    suspend fun acceptFriendRequestFromUser(senderUserId: String): Result<Unit>
     suspend fun rejectFriendRequest(requestId: String): Result<Unit>
     suspend fun cancelFriendRequest(requestId: String): Result<Unit>
     suspend fun removeFriend(friendUserId: String): Result<Unit>
